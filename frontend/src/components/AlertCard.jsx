@@ -1,5 +1,7 @@
 // components/AlertCard.jsx — Signal card component (clickable)
-// Purpose: Renders one signal alert. Clicking opens the detail modal.
+// Purpose: Renders one signal alert with hover affordance, confidence bar, animation
+
+import { ChevronRight } from 'lucide-react';
 
 const BADGE_STYLES = {
   Positive: 'bg-[#00C805]/10 text-[#00C805] border border-[#00C805]/20',
@@ -15,26 +17,38 @@ const SIGNAL_DOTS = {
   Pending: 'bg-yellow-500',
 };
 
-function formatTime(isoString) {
+function relativeTime(isoString) {
+  if (!isoString) return '';
   const date = new Date(isoString);
   const now = new Date();
   const diffMs = now - date;
-  const diffH = Math.floor(diffMs / 3600000);
-  if (diffH < 1) return 'Just now';
+  const diffSec = Math.floor(diffMs / 1000);
+  if (diffSec < 60) return 'just now';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffH = Math.floor(diffMin / 60);
   if (diffH < 24) return `${diffH}h ago`;
   const diffD = Math.floor(diffH / 24);
-  if (diffD === 1) return 'Yesterday';
+  if (diffD === 1) return 'yesterday';
+  if (diffD < 7) return `${diffD}d ago`;
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-export default function AlertCard({ signal, onClick }) {
+function confidenceColor(confidence) {
+  if (confidence >= 80) return '#00C805';
+  if (confidence >= 50) return '#F59E0B';
+  return '#FF3333';
+}
+
+export default function AlertCard({ signal, onClick, isNew }) {
   const { ticker, filing_type, classification, company_name, summary, confidence, filed_at } = signal;
   const badgeStyle = BADGE_STYLES[classification] || BADGE_STYLES.Neutral;
   const dotStyle = SIGNAL_DOTS[classification] || SIGNAL_DOTS.Neutral;
+  const confColor = confidenceColor(confidence);
 
   return (
     <div
-      className="bg-[#0A0A0A] border border-zinc-800 hover:border-zinc-600 p-5 transition-colors duration-75 cursor-pointer"
+      className={`bg-[#0A0A0A] border border-zinc-800 hover:border-zinc-600 p-5 transition-all duration-75 cursor-pointer group ${isNew ? 'signal-new' : ''}`}
       data-testid={`alert-card-${signal.id}`}
       onClick={() => onClick && onClick(signal)}
     >
@@ -54,10 +68,22 @@ export default function AlertCard({ signal, onClick }) {
           {classification}
         </span>
         <div className="ml-auto flex items-center gap-2">
-          <span className="font-mono text-[11px] text-zinc-300" data-testid={`confidence-${signal.id}`}>
-            {confidence}%
-          </span>
-          <span className="text-[9px] uppercase tracking-widest text-zinc-600 font-mono">confidence</span>
+          <div className="flex flex-col items-end">
+            <span className="font-mono text-[11px] text-zinc-300" data-testid={`confidence-${signal.id}`}>
+              {confidence}%
+            </span>
+            {/* Confidence bar */}
+            <div className="w-12 h-[2px] bg-zinc-800 mt-1">
+              <div
+                className="h-full transition-all duration-300"
+                style={{
+                  width: `${confidence}%`,
+                  backgroundColor: confColor,
+                }}
+              ></div>
+            </div>
+          </div>
+          <span className="text-[9px] uppercase tracking-widest text-zinc-600 font-mono">conf</span>
         </div>
       </div>
 
@@ -71,9 +97,16 @@ export default function AlertCard({ signal, onClick }) {
         <span className="text-zinc-600 text-xs font-mono" data-testid={`company-${signal.id}`}>
           {company_name}
         </span>
-        <span className="text-zinc-700 text-[11px] font-mono" data-testid={`timestamp-${signal.id}`}>
-          {formatTime(filed_at)}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-700 text-[11px] font-mono" data-testid={`timestamp-${signal.id}`}>
+            {relativeTime(filed_at)}
+          </span>
+          {/* Hover affordance */}
+          <ChevronRight
+            size={12}
+            className="text-zinc-700 opacity-0 group-hover:opacity-100 group-hover:text-[#0066FF] transition-all duration-75"
+          />
+        </div>
       </div>
     </div>
   );

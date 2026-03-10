@@ -1,6 +1,6 @@
 # server.py — AFI Backend (FastAPI + Supabase)
-# Purpose: Auth, signals, watchlist, EDGAR agent control routes
-# Dependencies: fastapi, supabase, pyjwt, httpx
+# Purpose: Auth, signals, watchlist, EDGAR agent control, health, telegram test, AI brief
+# Dependencies: fastapi, supabase, pyjwt, httpx, google-generativeai
 # Env vars: SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, CORS_ORIGINS
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
@@ -36,111 +36,6 @@ security = HTTPBearer(auto_error=False)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# ============ SEED SIGNALS ============
-# Supabase schema: id (uuid), ticker, company, filing_type, signal, confidence, summary, accession_number, filed_at, created_at
-SEED_SIGNALS = [
-    {
-        "ticker": "NVDA",
-        "filing_type": "8-K",
-        "signal": "Positive",
-        "company": "NVIDIA Corporation",
-        "summary": "NVIDIA discloses accelerated $10B share repurchase program; AI chip demand cited as primary driver of expanded capital return policy.",
-        "confidence": 91,
-        "filed_at": "2026-02-15T09:22:00Z",
-        "accession_number": "seed-001",
-    },
-    {
-        "ticker": "BA",
-        "filing_type": "8-K",
-        "signal": "Risk",
-        "company": "The Boeing Company",
-        "summary": "Boeing reports material weakness in manufacturing quality controls; FAA oversight review extended through Q2 2026 with no timeline for resolution.",
-        "confidence": 88,
-        "filed_at": "2026-02-15T07:45:00Z",
-        "accession_number": "seed-002",
-    },
-    {
-        "ticker": "AAPL",
-        "filing_type": "8-K",
-        "signal": "Positive",
-        "company": "Apple Inc.",
-        "summary": "Apple discloses $90B capital return program expansion; iPhone 17 pre-order volume described as 'unprecedented' in executive commentary.",
-        "confidence": 85,
-        "filed_at": "2026-02-15T06:30:00Z",
-        "accession_number": "seed-003",
-    },
-    {
-        "ticker": "NFLX",
-        "filing_type": "8-K",
-        "signal": "Risk",
-        "company": "Netflix, Inc.",
-        "summary": "Netflix discloses ongoing EU regulatory inquiry into algorithmic recommendation practices; potential fine up to EUR 850M disclosed.",
-        "confidence": 79,
-        "filed_at": "2026-02-15T04:15:00Z",
-        "accession_number": "seed-004",
-    },
-    {
-        "ticker": "MSFT",
-        "filing_type": "8-K",
-        "signal": "Positive",
-        "company": "Microsoft Corporation",
-        "summary": "Microsoft announces appointment of new Chief AI Officer; Azure AI revenue growth of 38% YoY cited alongside expanded data center commitments.",
-        "confidence": 83,
-        "filed_at": "2026-02-14T22:10:00Z",
-        "accession_number": "seed-005",
-    },
-    {
-        "ticker": "META",
-        "filing_type": "8-K",
-        "signal": "Neutral",
-        "company": "Meta Platforms, Inc.",
-        "summary": "Meta Platforms files updated executive compensation disclosure reflecting board-approved performance incentive adjustments for fiscal year 2025.",
-        "confidence": 72,
-        "filed_at": "2026-02-14T18:30:00Z",
-        "accession_number": "seed-006",
-    },
-    {
-        "ticker": "JPM",
-        "filing_type": "8-K",
-        "signal": "Risk",
-        "company": "JPMorgan Chase & Co.",
-        "summary": "JPMorgan Chase discloses unexpected $2.1B increase in credit loss provisions; commercial real estate portfolio exposure flagged as primary driver.",
-        "confidence": 86,
-        "filed_at": "2026-02-14T15:45:00Z",
-        "accession_number": "seed-007",
-    },
-    {
-        "ticker": "TSLA",
-        "filing_type": "8-K",
-        "signal": "Neutral",
-        "company": "Tesla, Inc.",
-        "summary": "Tesla files material agreement disclosure for new Gigafactory land acquisition in Monterrey, Mexico; production capacity and timeline undisclosed.",
-        "confidence": 68,
-        "filed_at": "2026-02-14T14:20:00Z",
-        "accession_number": "seed-008",
-    },
-    {
-        "ticker": "AMZN",
-        "filing_type": "8-K",
-        "signal": "Positive",
-        "company": "Amazon.com, Inc.",
-        "summary": "Amazon discloses $4B strategic investment in domestic logistics infrastructure; 15,000 new fulfillment center roles to be created across 12 states.",
-        "confidence": 87,
-        "filed_at": "2026-02-14T11:05:00Z",
-        "accession_number": "seed-009",
-    },
-    {
-        "ticker": "GOOGL",
-        "filing_type": "8-K",
-        "signal": "Risk",
-        "company": "Alphabet Inc.",
-        "summary": "Alphabet discloses DOJ antitrust proceedings expansion into cloud computing division; potential structural remedies including forced divestiture under review.",
-        "confidence": 84,
-        "filed_at": "2026-02-14T08:30:00Z",
-        "accession_number": "seed-010",
-    },
-]
 
 # ============ MODELS ============
 class UserSignup(BaseModel):
@@ -349,28 +244,98 @@ async def edgar_stop():
     edgar_agent_instance.stop()
     return {"status": "stopped", "message": "EDGAR polling agent stopped"}
 
-# ============ HEALTH ============
+# ============ HEALTH CHECK ============
+@api_router.get("/health")
+async def health_check():
+    return {
+        "status": "ok",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "service": "AFI API",
+        "database": "supabase",
+        "agent": edgar_agent_instance.get_status() if edgar_agent_instance else {"agent_status": "not_initialized"},
+    }
+
 @api_router.get("/")
 async def root():
     return {"status": "ok", "service": "AFI API", "database": "supabase"}
 
-# ============ SEED DATA ============
-async def seed_signals():
-    """Insert seed signals into Supabase if the signals table is empty."""
+# ============ TELEGRAM TEST ============
+@api_router.post("/telegram/test")
+async def telegram_test():
     try:
-        result = supabase.table("signals").select("id").limit(1).execute()
-        if not result.data:
-            logger.info("Seeding signals table with 10 initial signals...")
-            for signal in SEED_SIGNALS:
-                try:
-                    supabase.table("signals").insert(signal).execute()
-                except Exception as e:
-                    logger.warning(f"Seed signal {signal['accession_number']} may already exist: {e}")
-            logger.info("Seed signals inserted successfully.")
+        from telegram_bot import send_test_message
+        success = send_test_message()
+        if success:
+            return {"status": "sent", "message": "Test message sent to Telegram"}
         else:
-            logger.info(f"Signals table already has records, skipping seed.")
+            return {"status": "failed", "message": "Telegram is disabled or misconfigured"}
     except Exception as e:
-        logger.error(f"Failed to seed signals: {e}")
+        logger.error(f"Telegram test failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+# ============ AI BRIEF ============
+@api_router.get("/brief")
+async def get_brief():
+    """Generate a 3-sentence market intelligence brief from the latest signals."""
+    try:
+        result = supabase.table("signals").select("*").order("filed_at", desc=True).limit(10).execute()
+        signals = result.data or []
+
+        if not signals:
+            return {"brief": "No signals have been processed yet. The EDGAR agent is monitoring for new 8-K filings.", "signal_count": 0}
+
+        # Build context for Gemini
+        signal_summaries = []
+        for s in signals:
+            signal_summaries.append(f"{s.get('ticker','?')} ({s.get('signal','?')}, {s.get('confidence',0)}%): {s.get('summary','')}")
+        context = "\n".join(signal_summaries)
+
+        gemini_key = os.environ.get("GEMINI_API_KEY", "")
+        if not gemini_key or gemini_key.startswith("YOUR_"):
+            # Fallback: generate a simple brief without AI
+            positive = sum(1 for s in signals if s.get("signal") == "Positive")
+            risk = sum(1 for s in signals if s.get("signal") == "Risk")
+            neutral = sum(1 for s in signals if s.get("signal") == "Neutral")
+            brief = f"AFI has processed {len(signals)} signals. {positive} classified as Positive, {risk} as Risk, {neutral} as Neutral. Monitor your watchlist for targeted alerts."
+            return {"brief": brief, "signal_count": len(signals)}
+
+        import google.generativeai as genai
+        genai.configure(api_key=gemini_key)
+        model = genai.GenerativeModel('gemini-2.5-flash')
+
+        prompt = f"""You are a financial intelligence analyst. Given these latest SEC 8-K filing signals, write exactly 3 sentences summarizing the market intelligence. Be concise, professional, and specific. Reference company names and signal types. No bullet points, no headers, just 3 sentences.
+
+Signals:
+{context}"""
+
+        response = model.generate_content(prompt)
+        brief_text = response.text.strip()
+
+        return {"brief": brief_text, "signal_count": len(signals)}
+    except Exception as e:
+        logger.error(f"Failed to generate brief: {e}")
+        return {"brief": "Unable to generate market brief at this time.", "signal_count": 0}
+
+# ============ SEED CLEANUP ============
+async def cleanup_seed_data():
+    """Remove seed signals (accession_number starting with 'seed-') from Supabase."""
+    try:
+        result = supabase.table("signals").select("id, accession_number").like(
+            "accession_number", "seed-%"
+        ).execute()
+        seed_rows = result.data or []
+        if seed_rows:
+            logger.info(f"Removing {len(seed_rows)} seed signals from database...")
+            for row in seed_rows:
+                try:
+                    supabase.table("signals").delete().eq("id", row["id"]).execute()
+                except Exception as e:
+                    logger.warning(f"Failed to delete seed signal {row['id']}: {e}")
+            logger.info("Seed data cleanup complete.")
+        else:
+            logger.info("No seed data found in signals table.")
+    except Exception as e:
+        logger.error(f"Seed cleanup error: {e}")
 
 # ============ APP SETUP ============
 app.include_router(api_router)
@@ -384,7 +349,19 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
-    await seed_signals()
+    global edgar_agent_instance
+
+    # Step 1: Clean seed data
+    await cleanup_seed_data()
+
+    # Step 2: Auto-start EDGAR agent
+    try:
+        from edgar_agent import EdgarAgent
+        edgar_agent_instance = EdgarAgent(supabase)
+        edgar_agent_instance.start()
+        logger.info("EDGAR agent auto-started on server boot")
+    except Exception as e:
+        logger.error(f"Failed to auto-start EDGAR agent: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_event():

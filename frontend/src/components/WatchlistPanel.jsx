@@ -9,7 +9,7 @@ export default function WatchlistPanel({ watchlist, onAdd, onRemove, loading }) 
     const ticker = input.trim().toUpperCase();
     if (!ticker) return;
     if (!/^[A-Z]{1,5}$/.test(ticker)) {
-      setError('Ticker must be 1–5 letters only.');
+      setError('Ticker must be 1-5 letters only.');
       return;
     }
     setError('');
@@ -26,7 +26,7 @@ export default function WatchlistPanel({ watchlist, onAdd, onRemove, loading }) 
   };
 
   return (
-    <div className="w-[280px] shrink-0 border-l border-zinc-800 bg-[#050505] flex flex-col h-full" data-testid="watchlist-panel">
+    <div className="flex flex-col flex-1 min-h-0" data-testid="watchlist-panel">
       {/* Header */}
       <div className="border-b border-zinc-800 px-4 py-3 flex items-center justify-between">
         <div>
@@ -80,7 +80,7 @@ export default function WatchlistPanel({ watchlist, onAdd, onRemove, loading }) 
         {watchlist.length === 0 ? (
           <div className="px-4 py-8 text-center">
             <div className="text-zinc-700 text-xs font-mono leading-relaxed">
-              Add up to 10 tickers to filter your alert feed.
+              Your watchlist is empty. Try adding AAPL, NVDA, or TSLA to start filtering.
             </div>
           </div>
         ) : (
