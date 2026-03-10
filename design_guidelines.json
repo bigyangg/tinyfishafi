@@ -1,0 +1,114 @@
+{
+  "identity": {
+    "name": "AFI - Autonomous Filing Intelligence",
+    "aesthetic": "Terminal Realism / High-Frequency Trading",
+    "core_principles": [
+      "Zero Latency Visuals: No animations, only instant state changes.",
+      "Data Density: High information per pixel ratio.",
+      "Sharpness: 0px border-radius everywhere.",
+      "Signal over Noise: Color is used ONLY for status and action."
+    ]
+  },
+  "typography": {
+    "font_family": {
+      "sans": "Inter, -apple-system, BlinkMacSystemFont, sans-serif",
+      "mono": "'JetBrains Mono', 'SF Mono', 'Fira Code', monospace"
+    },
+    "imports": [
+      "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');"
+    ],
+    "styles": {
+      "h1": "font-sans font-bold text-4xl tracking-tight text-white",
+      "h2": "font-sans font-semibold text-2xl tracking-tight text-white",
+      "h3": "font-sans font-medium text-lg tracking-tight text-zinc-100",
+      "body": "font-sans text-sm text-zinc-400 leading-relaxed",
+      "ticker": "font-mono font-bold text-sm tracking-wide uppercase",
+      "data_value": "font-mono text-xs text-zinc-300",
+      "label": "font-sans text-[10px] uppercase tracking-wider text-zinc-500 font-semibold"
+    }
+  },
+  "colors": {
+    "palette": {
+      "background": "#050505",
+      "surface": "#0A0A0A",
+      "surface_highlight": "#121212",
+      "border": "#27272A",
+      "primary": "#0066FF",
+      "primary_hover": "#0052CC",
+      "positive": "#00C805",
+      "risk": "#FF3333",
+      "neutral": "#71717A"
+    },
+    "tailwind_config_hsl": {
+      "background": "0 0% 2%",
+      "foreground": "0 0% 98%",
+      "card": "0 0% 3%",
+      "card-foreground": "0 0% 98%",
+      "popover": "0 0% 3%",
+      "popover-foreground": "0 0% 98%",
+      "primary": "216 100% 50%",
+      "primary-foreground": "0 0% 100%",
+      "secondary": "240 3.7% 15.9%",
+      "secondary-foreground": "0 0% 98%",
+      "muted": "240 3.7% 15.9%",
+      "muted-foreground": "240 5% 64.9%",
+      "accent": "240 3.7% 15.9%",
+      "accent-foreground": "0 0% 98%",
+      "destructive": "0 62.8% 30.6%",
+      "destructive-foreground": "0 0% 98%",
+      "border": "240 3.7% 15.9%",
+      "input": "240 3.7% 15.9%",
+      "ring": "216 100% 50%"
+    }
+  },
+  "spacing_layout": {
+    "radius": "0px",
+    "container_padding": "p-6 md:p-8",
+    "grid_gap": "gap-4",
+    "sidebar_width": "w-64"
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-[#0066FF] hover:bg-[#0052CC] text-white rounded-none font-medium text-sm h-9 px-4 transition-colors duration-75",
+      "secondary": "bg-zinc-900 hover:bg-zinc-800 text-white border border-zinc-800 rounded-none font-medium text-sm h-9 px-4 transition-colors duration-75",
+      "ghost": "hover:bg-zinc-800 text-zinc-400 hover:text-white rounded-none transition-colors duration-75"
+    },
+    "cards": {
+      "base": "bg-[#0A0A0A] border border-zinc-800 rounded-none p-5",
+      "hover_effect": "hover:border-zinc-600 transition-colors duration-75 cursor-default"
+    },
+    "badges": {
+      "positive": "bg-[#00C805]/10 text-[#00C805] border border-[#00C805]/20 rounded-none px-2 py-0.5 text-[10px] font-mono font-bold uppercase",
+      "risk": "bg-[#FF3333]/10 text-[#FF3333] border border-[#FF3333]/20 rounded-none px-2 py-0.5 text-[10px] font-mono font-bold uppercase",
+      "neutral": "bg-zinc-800 text-zinc-400 border border-zinc-700 rounded-none px-2 py-0.5 text-[10px] font-mono font-bold uppercase"
+    },
+    "inputs": {
+      "base": "bg-black border border-zinc-800 focus:border-[#0066FF] focus:ring-0 rounded-none h-10 text-sm text-white placeholder:text-zinc-600"
+    }
+  },
+  "visual_enhancers": {
+    "gradients": "NONE. Strictly forbidden.",
+    "shadows": "NONE. Use borders for separation.",
+    "textures": "Subtle scanline overlay allowed on Hero section only."
+  },
+  "image_urls": {
+    "hero_background": "https://images.unsplash.com/photo-1767477665602-ab4e96be7701?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1MDZ8MHwxfHNlYXJjaHwyfHxhYnN0cmFjdCUyMGRpZ2l0YWwlMjBkYXRhJTIwZmxvdyUyMGJsdWUlMjBnZW9tZXRyaWMlMjB3aXJlZnJhbWUlMjBkYXJrJTIwYmFja2dyb3VuZHxlbnwwfHx8fDE3NzMxNTU1ODd8MA&ixlib=rb-4.1.0&q=85"
+  },
+  "instructions_to_main_agent": [
+    "1. UPDATE TAILWIND CONFIG: First, update `tailwind.config.js` to set `borderRadius` to 0 and apply the HSL color values provided in `colors.tailwind_config_hsl`. This is the most critical step to achieve the sharp look.",
+    "2. FONT SETUP: Import Inter and JetBrains Mono in `index.css`. Set JetBrains Mono as the font for all elements with class `font-mono`.",
+    "3. NO ANIMATIONS: Do not use Framer Motion. Do not use CSS transitions longer than 100ms. Everything must feel instant.",
+    "4. LAYOUT: Build the Dashboard with a Fixed Sidebar (Left) and a Main Content Area. The Main Content Area should have the Alert Feed (Wide) and Watchlist (Narrow) side-by-side on desktop.",
+    "5. DATA FORMATTING: All tickers (e.g., $AAPL), confidence scores (e.g., 98%), and timestamps MUST use `font-mono`.",
+    "6. SHARP EDGES: Ensure every single `div`, `button`, `input`, and `card` has `rounded-none`.",
+    "7. BORDER HIERARCHY: Use `border-zinc-800` for structural borders. Use `border-zinc-700` for active or hover states.",
+    "8. ACCENT USAGE: Use Electric Blue (#0066FF) ONLY for: Primary Buttons, Active State Indicators, and extremely high-importance links. Do not overuse it."
+  ],
+  "universal_guidelines": [
+    "Don't make generic centered layouts.",
+    "Create depth through border hierarchy (z-index is less important in flat design, use borders).",
+    "Every interaction needs micro-feedback (color shift on hover).",
+    "Use 2-3x more spacing than feels comfortable inside containers, but keep the grid gap tight (4px or 1px) to feel 'dense'.",
+    "All interactive and key informational elements MUST include a `data-testid` attribute."
+  ]
+}
