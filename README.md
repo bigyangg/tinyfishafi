@@ -1,238 +1,183 @@
-# AFI — Autonomous Filing Intelligence
+# AFI - Autonomous Filing Intelligence
 
-> AI That Reads SEC Filings So You Don't Have To.
-
-AFI is a regulatory intelligence dashboard for retail investors. It monitors SEC EDGAR filings in real time, interprets them with AI (Claude Sonnet), scores the signal, and delivers structured intelligence via dashboard and Telegram before the news cycle picks it up.
+AFI is a regulatory intelligence dashboard designed for retail investors and active traders. It monitors SEC EDGAR filings in real time, interprets them utilizing Google's Gemini AI, scores the regulatory signal, and delivers structured intelligence via a real-time dashboard and Telegram alerts before information reaches mainstream news cycles.
 
 ---
 
-## Tech Stack
+## Technology Stack
 
-| Layer | Technology |
-|-------|-----------:|
+| Component | Technology |
+|-----------|-----------|
 | Frontend | React 19, React Router v7, Tailwind CSS |
 | Backend | FastAPI (Python 3.11) |
-| Database | Supabase (PostgreSQL + Realtime) |
-| Auth | Supabase Auth (email + password) |
-| AI | Claude Sonnet (claude-sonnet-4-20250514) via Anthropic SDK |
+| Database | Supabase (PostgreSQL with Realtime Subscriptions) |
+| Authentication | Supabase Auth (Email and Password) |
+| Artificial Intelligence | Google Gemini (gemini-1.5-flash) |
 | Web Agent | TinyFish Web Agent API |
-| Alerts | Telegram Bot API |
-| Fonts | Inter + JetBrains Mono (Google Fonts) |
-| Icons | Lucide React |
+| Alerting System | Telegram Bot API |
+| Typography | Inter (UI), JetBrains Mono (Data) |
 
 ---
 
 ## Project Structure
 
-```
+```text
 /
 ├── backend/
-│   ├── server.py            # FastAPI app — auth, signals, watchlist, EDGAR control
-│   ├── edgar_agent.py       # EDGAR 8-K polling + AI classification agent
-│   ├── telegram_bot.py      # Telegram alert delivery
+│   ├── server.py            # FastAPI application (auth, signals, watchlist, control)
+│   ├── edgar_agent.py       # EDGAR 8-K polling and Gemini AI classification
+│   ├── telegram_bot.py      # Telegram alert dispatcher
 │   ├── requirements.txt     # Python dependencies
-│   └── .env                 # Supabase, TinyFish, Anthropic, Telegram credentials
+│   └── .env                 # API keys and environment configuration
 ├── frontend/
 │   ├── src/
-│   │   ├── App.js                        # Router + protected routes
+│   │   ├── App.js                        # Client-side routing
 │   │   ├── lib/supabase.js              # Supabase client singleton
-│   │   ├── context/AuthContext.jsx       # Supabase auth state
+│   │   ├── context/AuthContext.jsx       # Authentication state management
 │   │   ├── pages/
-│   │   │   ├── Landing.jsx               # Marketing landing page
-│   │   │   ├── Auth.jsx                  # Login / signup form
-│   │   │   ├── Dashboard.jsx             # Alert feed + realtime + agent status
-│   │   │   └── Pricing.jsx               # 3-tier pricing page
+│   │   │   ├── Landing.jsx               # Marketing entry page
+│   │   │   ├── Auth.jsx                  # Authentication forms
+│   │   │   ├── Dashboard.jsx             # Real-time alert feed
+│   │   │   └── Pricing.jsx               # Subscription tiers
 │   │   └── components/
-│   │       ├── AlertCard.jsx             # Clickable signal card
-│   │       ├── SignalDetailModal.jsx     # Full signal detail overlay
-│   │       ├── WatchlistPanel.jsx        # Watchlist add/remove UI
-│   │       └── DashboardSidebar.jsx      # Nav sidebar
-│   ├── tailwind.config.js                # 0px radius, dark theme, custom fonts
-│   └── .env                              # Supabase URL + anon key
+│   │       ├── AlertCard.jsx             # Interactive signal card
+│   │       ├── SignalDetailModal.jsx     # Comprehensive signal data overlay
+│   │       ├── WatchlistPanel.jsx        # User watchlist management
+│   │       └── DashboardSidebar.jsx      # Navigation sidebar
+│   ├── tailwind.config.js                # Design system configuration
+│   └── .env                              # Frontend environment variables
 ├── memory/
-│   └── PRD.md               # Full product requirements document
-├── CLAUDE.md                # AI context file
-└── README.md
+│   └── PRD.md               # Product Requirements Document
+├── CLAUDE.md                # AI agent context and architecture constraints
+└── README.md                # System documentation
 ```
+
+---
+
+## System Architecture
+
+### EDGAR Polling Agent
+The autonomous agent (`edgar_agent.py`) executes on a 5-minute interval:
+1. Queries the SEC EDGAR EFTS endpoint for new 8-K filings based on the current date.
+2. Validates the `accession_number` against the Supabase database to prevent duplicate processing.
+3. Extracts the primary document text utilizing the TinyFish Web Agent API (with a direct HTTP fallback mechanism).
+4. Submits the extracted text to the Google Gemini API for financial classification (Positive, Neutral, or Risk).
+5. Commits the resulting signal to the Supabase `signals` table.
+6. Dispatches a formatted Telegram alert for non-pending signals.
+
+Note: If the `GEMINI_API_KEY` is not present, the agent gracefully degrades by storing the filing with a "Pending" status and a confidence score of 0.
+
+### Real-Time Dashboard
+The frontend application connects to Supabase utilizing `postgres_changes` subscriptions. When the EDGAR agent commits a new signal to the database, the dashboard immediately reflects the update without requiring a client-side polling interval or page refresh.
 
 ---
 
 ## API Reference
 
-### Auth
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/auth/signup` | Create account via Supabase Auth → returns JWT |
-| POST | `/api/auth/login` | Login via Supabase Auth → returns JWT |
-| GET | `/api/auth/me` | Current user (requires `Authorization: Bearer <token>`) |
+### Authentication
+*   `POST /api/auth/signup`: Create a new user account via Supabase Auth (returns a JWT session).
+*   `POST /api/auth/login`: Authenticate an existing user (returns a JWT session).
+*   `GET /api/auth/me`: Validate the current user token.
 
 ### Signals
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/signals` | All signals from Supabase (ordered by `filed_at` desc) |
-| GET | `/api/signals?tickers=AAPL,NVDA` | Filtered by tickers |
+*   `GET /api/signals`: Retrieve all processed signals, ordered by filing date descending.
+*   `GET /api/signals?tickers=AAPL,NVDA`: Retrieve signals filtered by a comma-separated list of ticker symbols.
 
-### Watchlist (requires auth)
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/watchlist` | Get user's watchlist |
-| POST | `/api/watchlist` | Add ticker `{ "ticker": "AAPL" }` |
-| DELETE | `/api/watchlist/{ticker}` | Remove ticker |
+### Watchlist (Requires Authentication)
+*   `GET /api/watchlist`: Retrieve the authenticated user's active watchlist.
+*   `POST /api/watchlist`: Append a ticker to the user's watchlist (Payload: `{ "ticker": "AAPL" }`).
+*   `DELETE /api/watchlist/{ticker}`: Remove a ticker from the user's watchlist.
 
-### EDGAR Agent
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/edgar/status` | Returns `last_poll_time`, `filings_processed_today`, `agent_status` |
-| POST | `/api/edgar/start` | Starts EDGAR polling loop (every 5 min) |
-| POST | `/api/edgar/stop` | Stops polling loop |
+### EDGAR Agent Control
+*   `GET /api/edgar/status`: Retrieve the current operational status of the polling agent.
+*   `POST /api/edgar/start`: Initialize the 5-minute polling loop.
+*   `POST /api/edgar/stop`: Terminate the polling loop.
 
 ---
 
-## Seed Data
+## Database Schema (Supabase)
 
-10 realistic SEC 8-K filings seeded into Supabase `signals` table:
+### Table: signals
+*   `id`: UUID (Primary Key, Auto-generated)
+*   `ticker`: TEXT (Standardized uppercase)
+*   `company`: TEXT (Full registered entity name)
+*   `filing_type`: TEXT (E.g., "8-K")
+*   `signal`: TEXT (Enum: Positive, Neutral, Risk, Pending)
+*   `confidence`: INTEGER (0-100 scale)
+*   `summary`: TEXT (Concise classification rationale)
+*   `accession_number`: TEXT (Unique SEC document identifier)
+*   `filed_at`: TIMESTAMPTZ (Original SEC filing timestamp)
+*   `created_at`: TIMESTAMPTZ (Database ingestion timestamp)
 
-| Ticker | Company | Signal | Confidence |
-|--------|---------|--------|------------|
-| NVDA | NVIDIA Corporation | Positive | 91% |
-| BA | The Boeing Company | Risk | 88% |
-| AAPL | Apple Inc. | Positive | 85% |
-| NFLX | Netflix, Inc. | Risk | 79% |
-| MSFT | Microsoft Corporation | Positive | 83% |
-| META | Meta Platforms, Inc. | Neutral | 72% |
-| JPM | JPMorgan Chase & Co. | Risk | 86% |
-| TSLA | Tesla, Inc. | Neutral | 68% |
-| AMZN | Amazon.com, Inc. | Positive | 87% |
-| GOOGL | Alphabet Inc. | Risk | 84% |
+### Table: watchlist
+*   `id`: UUID (Primary Key, Auto-generated)
+*   `user_id`: UUID (Foreign Key referencing auth.users)
+*   `ticker`: TEXT (Standardized uppercase)
+*   `created_at`: TIMESTAMPTZ
+*   Constraint: UNIQUE(user_id, ticker)
 
 ---
 
-## Local Development
+## Development Environment Setup
 
-### Backend
+### Environment Requirements
+Ensure the following variables are configured in `backend/.env`:
+*   `SUPABASE_URL`
+*   `SUPABASE_ANON_KEY`
+*   `SUPABASE_SERVICE_ROLE_KEY`
+*   `TINYFISH_API_KEY`
+*   `GEMINI_API_KEY`
+*   `TELEGRAM_BOT_TOKEN`
+*   `TELEGRAM_CHAT_ID`
+*   `USE_TINYFISH` (Boolean)
+*   `TELEGRAM_ENABLED` (Boolean)
+
+Ensure the following variables are configured in `frontend/.env`:
+*   `REACT_APP_SUPABASE_URL`
+*   `REACT_APP_SUPABASE_ANON_KEY`
+*   `REACT_APP_BACKEND_URL` (E.g., http://localhost:8001)
+
+### Execution Procedures
+
+**Backend Application:**
 ```bash
 cd backend
 pip install -r requirements.txt
 uvicorn server:app --reload --port 8001
 ```
 
-### Frontend
+**Frontend Application:**
+Note: Use `yarn` to prevent dependency resolution conflicts.
 ```bash
 cd frontend
 yarn install
 yarn start
 ```
 
-### Environment Variables
-
-**backend/.env**
-```
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_ANON_KEY=your-anon-key
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-TINYFISH_API_KEY=your-tinyfish-key
-ANTHROPIC_API_KEY=your-anthropic-key
-TELEGRAM_BOT_TOKEN=your-bot-token
-TELEGRAM_CHAT_ID=@your_bot_or_channel
-USE_TINYFISH=true
-TELEGRAM_ENABLED=true
-CORS_ORIGINS=*
-```
-
-**frontend/.env**
-```
-REACT_APP_SUPABASE_URL=https://your-project.supabase.co
-REACT_APP_SUPABASE_ANON_KEY=your-anon-key
-REACT_APP_BACKEND_URL=http://localhost:8001
-```
-
----
-
-## EDGAR Agent
-
-The EDGAR agent polls SEC EDGAR every 5 minutes for new 8-K filings:
-1. Queries `https://efts.sec.gov/LATEST/search-index` for today's 8-K filings
-2. Checks each `accession_number` against Supabase to skip duplicates
-3. Extracts filing text via TinyFish Web Agent API (or direct HTTP fallback)
-4. Sends text to Claude Sonnet for classification (Positive / Neutral / Risk)
-5. Stores result in Supabase `signals` table
-6. Triggers Telegram alert for non-Pending signals
-
-If `ANTHROPIC_API_KEY` is missing or placeholder: stores `signal: "Pending"`, `confidence: 0`, logs a warning. Resumes classification when a real key is set.
-
----
-
-## Telegram Bot
-
-Bot handle: `@tinyfishafi_bot`
-
-Alert format:
-```
-🔵 AFI ALERT
-
-[TICKER] — 8-K Filing
-Signal: 🟢 Positive / ⚪ Neutral / 🔴 Risk
-SUMMARY TEXT
-
-Confidence: XX% | DATE
-🔗 View on AFI Dashboard
-```
-
-- Controlled by `TELEGRAM_ENABLED=true`
-- Skips `signal: "Pending"` alerts
-- All calls wrapped in try/except — never crashes the agent
-
----
-
-## Design System
-
-- **Theme:** Dark mode only (`#050505` background)
-- **Accent:** Electric Blue `#0066FF`
-- **Signal Colors:** Positive `#00C805` · Neutral `#71717A` · Risk `#FF3333`
-- **Border Radius:** 0px (sharp edges everywhere)
-- **Fonts:** Inter (UI) + JetBrains Mono (tickers, data, confidence scores)
-- **Aesthetic:** Linear / Vercel / Stripe dashboard feel
-
----
-
-## Supabase Tables
-
-### `signals`
-| Column | Type |
-|--------|------|
-| id | UUID (PK, auto) |
-| ticker | TEXT |
-| company | TEXT |
-| filing_type | TEXT |
-| signal | TEXT (Positive/Neutral/Risk/Pending) |
-| confidence | INTEGER (0-100) |
-| summary | TEXT |
-| accession_number | TEXT (unique) |
-| filed_at | TIMESTAMPTZ |
-| created_at | TIMESTAMPTZ |
-
-### `watchlist`
-| Column | Type |
-|--------|------|
-| id | UUID (PK, auto) |
-| user_id | UUID (FK to auth.users) |
-| ticker | TEXT |
-| created_at | TIMESTAMPTZ |
-| | UNIQUE(user_id, ticker) |
-
 ---
 
 ## Phase Roadmap
 
-| Phase | Status | Key Features |
-|-------|--------|-------------|
-| Phase 1 | ✅ Complete | Dashboard shell, auth, seed signals, watchlist, pricing |
-| Phase 2 | ✅ Complete | Supabase migration, live EDGAR feed, AI classification, Telegram bot, realtime dashboard |
-| Phase 3 | Planned | REST API, signal feedback loop, market reaction correlation |
-| Phase 4 | Planned | White-label API, institutional tier, international filings |
+### Phase 1: Foundation (Completed)
+*   System architecture and UI design system implementation.
+*   Supabase authentication integration.
+*   Static seed data generation.
+*   Basic watchlist CRUD operations.
 
----
+### Phase 2: Core Intelligence (Completed)
+*   Full migration to Supabase for data persistence and authentication.
+*   Integration of the EDGAR polling agent.
+*   Implementation of the Gemini AI classification pipeline.
+*   Telegram bot integration for external alerting.
+*   Real-time dashboard updates via Supabase WebSockets.
 
-## License
+### Phase 3: Advanced Capabilities (Pending)
+*   Implementation of a REST API gateway for Pro-tier subscribers.
+*   User feedback loop mechanism (accuracy voting on AI classifications).
+*   Correlation analytics between signals and market reactions.
+*   Stripe billing integration.
 
-Confidential — TinyFish Accelerator submission. © 2026 AFI.
+### Phase 4: Enterprise Expansion (Planned)
+*   Support for 10-K, 10-Q, and S-1 filing analysis.
+*   White-label API offerings for institutional clients.
+*   International regulatory filing support.

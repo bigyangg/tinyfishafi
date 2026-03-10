@@ -1,215 +1,107 @@
-# CLAUDE.md — AFI Codebase Context
+# CLAUDE.md - AFI Architecture and Context Specification
 
-This file gives Claude AI full context about the AFI codebase for autonomous code editing.
+## Project Definition
 
----
+**AFI (Autonomous Filing Intelligence)**
+A regulatory intelligence dashboard designed for active retail and institutional traders. AFI monitors SEC EDGAR filings asynchronously, processes them utilizing the Google Gemini AI model (gemini-1.5-flash), generates standard signal classifications (Positive, Neutral, Risk) with assigned confidence intervals, and disseminates this intelligence via a real-time dashboard and programmatic Telegram alerts.
 
-## What This Project Is
-
-**AFI (Autonomous Filing Intelligence)** — A regulatory intelligence dashboard for retail investors. Monitors SEC EDGAR filings in real time, interprets them with Claude Sonnet AI, scores signals (Positive / Neutral / Risk), and delivers intelligence via dashboard + Telegram.
-
-**Current Phase:** Phase 2 — Live EDGAR feed, Supabase database, AI classification, Telegram alerts, realtime dashboard.
+**Current State:** Phase 2 (Completed) - Live active feed, Supabase authentication/storage, Gemini AI integration, real-time client-side synchronization, Telegram alerting.
 
 ---
 
-## Architecture
+## Architectural Topology
 
-```
-FastAPI backend (port 8001) ← Supabase ← Supabase Auth
-EDGAR Agent (background thread) → polls SEC EDGAR → Claude Sonnet → Supabase → Telegram
-React frontend (port 3000) → Supabase Realtime + /api/* endpoints
+```text
+FastAPI Backend (Port: 8001) <-> Supabase <-> Supabase Auth
+EDGAR Polling Subprocess -> SEC EDGAR -> Gemini API -> Supabase -> Telegram Bot
+React Client (Port: 3000) -> Supabase Realtime + /api/* REST endpoints
 ```
 
-All backend routes MUST be prefixed with `/api` (Kubernetes ingress routing requirement).
+**Routing Constraint:** All backend API routes must strictly utilize the `/api/` prefix to comply with Kubernetes ingress configurations.
 
 ---
 
-## Key Files
+## File System Structure
 
-### Backend
-- `/backend/server.py` — FastAPI app. Auth (Supabase), signals, watchlist, EDGAR control routes.
-- `/backend/edgar_agent.py` — EDGAR 8-K polling agent. TinyFish/HTTP extraction, Claude Sonnet classification.
-- `/backend/telegram_bot.py` — Telegram alert delivery. Formatted messages with signal emoji.
-- `/backend/.env` — `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `TINYFISH_API_KEY`, `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `USE_TINYFISH`, `TELEGRAM_ENABLED`, `CORS_ORIGINS`
+### Backend Infrastructure
+*   `/backend/server.py`: Primary FastAPI application. Manages authentication delegation to Supabase Auth, routes signals and watchlists, and exposes endpoints to control the EDGAR agent.
+*   `/backend/edgar_agent.py`: Asynchronous 8-K polling agent. Extracts document text via TinyFish or direct HTTP, routes to Gemini for semantic classification, and triggers alerts.
+*   `/backend/telegram_bot.py`: Dispatches alerts utilizing the Telegram API, handling internal error states without crashing the main subprocess.
+*   `/backend/.env`: Environment vars: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `TINYFISH_API_KEY`, `GEMINI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `USE_TINYFISH`, `TELEGRAM_ENABLED`, `CORS_ORIGINS`.
 
-### Frontend
-- `/frontend/src/App.js` — Router. `ProtectedRoute` and `PublicOnlyRoute`.
-- `/frontend/src/lib/supabase.js` — Supabase client singleton.
-- `/frontend/src/context/AuthContext.jsx` — Supabase Auth state. `signInWithPassword`, `signUp` (via backend admin API), `onAuthStateChange`.
-- `/frontend/src/pages/Landing.jsx` — Marketing page.
-- `/frontend/src/pages/Auth.jsx` — Login/signup toggle.
-- `/frontend/src/pages/Dashboard.jsx` — Protected. Alert feed, 60s polling, Supabase realtime subscriptions, agent status bar, signal detail modal.
-- `/frontend/src/pages/Pricing.jsx` — Static 3-tier page.
-- `/frontend/src/components/AlertCard.jsx` — Clickable signal card. Opens detail modal.
-- `/frontend/src/components/SignalDetailModal.jsx` — Full signal detail overlay with EDGAR link.
-- `/frontend/src/components/WatchlistPanel.jsx` — Right panel. Add/remove tickers.
-- `/frontend/src/components/DashboardSidebar.jsx` — Left nav.
+### Client Architecture
+*   `/frontend/src/App.js`: Application router utilizing `ProtectedRoute` component design.
+*   `/frontend/src/lib/supabase.js`: Global Supabase client instance.
+*   `/frontend/src/context/AuthContext.jsx`: Supabase Auth state implementation mapping signup flows through backend admin APIs.
+*   `/frontend/src/pages/Dashboard.jsx`: Primary protected console housing the alert feed, real-time subscription mechanisms, and system status indicators.
+*   `/frontend/src/components/AlertCard.jsx`: Interactive unit representing an individual classification event.
+*   `/frontend/src/components/SignalDetailModal.jsx`: Modal presenting the full intelligence summary and external navigation to the primary SEC document.
 
-### Config
-- `/frontend/tailwind.config.js` — `borderRadius: 0px` everywhere. Custom HSL color vars. Inter + JetBrains Mono fonts.
-- `/frontend/src/index.css` — CSS vars for dark theme. Google Fonts import.
-- `/memory/PRD.md` — Full product requirements and backlog.
-
----
-
-## Data Models
-
-### Signal (Supabase `signals` table)
-```
-id: UUID (auto-generated)
-ticker: TEXT           # Always uppercase
-filing_type: TEXT      # "8-K"
-signal: TEXT           # "Positive" | "Neutral" | "Risk" | "Pending"
-company: TEXT          # Full company name
-summary: TEXT          # 1-sentence plain English
-confidence: INTEGER    # 0-100
-accession_number: TEXT # SEC accession number (unique)
-filed_at: TIMESTAMPTZ
-created_at: TIMESTAMPTZ
-```
-
-**API mapping:** The API returns `classification` (mapped from `signal`) and `company_name` (mapped from `company`) for frontend compatibility via `format_signal_for_api()` in `server.py`.
-
-### User (Supabase Auth)
-Managed by Supabase Auth. Backend uses `supabase.auth.admin.create_user()` for signup with `email_confirm: True`.
-
-### Watchlist (Supabase `watchlist` table)
-```
-id: UUID (auto-generated)
-user_id: UUID          # FK to auth.users
-ticker: TEXT           # max 10 per user, uppercase
-created_at: TIMESTAMPTZ
-UNIQUE(user_id, ticker)
-```
+### Technical and Thematic Constraints (Non-Negotiable)
+1.  **Background Theme:** `#050505` (Dark mode architecture only).
+2.  **Surface/Component Theme:** `#0A0A0A`.
+3.  **Accent Color:** `#0066FF` (Strictly reserved for primary interactive states).
+4.  **Signal Color Mapping:** Positive (`#00C805`), Risk (`#FF3333`), Neutral (`#71717A`).
+5.  **Border Radius:** 0px exclusively globally.
+6.  **Typography:** Inter (Primary Interface), JetBrains Mono (Data-heavy components, tickers, timestamps, financial output).
+7.  **Animation Restrictions:** Strictly limited. UI transitions capped at 75ms. No gradients allowed.
 
 ---
 
-## Auth Flow
+## Data Modeling
 
-1. User signs up → backend `POST /api/auth/signup` → `supabase.auth.admin.create_user()` + `sign_in_with_password()` → JWT returned
-2. Frontend `AuthContext` signs in via `supabase.auth.signInWithPassword()` → session stored by Supabase client
-3. Protected requests → `Authorization: Bearer <supabase_access_token>` via `authHeaders()` from `AuthContext`
-4. Backend validates token via `supabase.auth.get_user(token)`
+### Supabase Table: `signals`
+| Column | Data Type | Properties |
+|--------|-----------|------------|
+| `id` | UUID | Primary Key, Auto-generated |
+| `ticker` | TEXT | Enforced Uppercase |
+| `filing_type` | TEXT | Document schema identifier (e.g., "8-K") |
+| `signal` | TEXT | Enum values: Positive, Neutral, Risk, Pending |
+| `company` | TEXT | Standardized corporate entity identifier |
+| `summary` | TEXT | Short-form LLM output summary |
+| `confidence` | INTEGER | Machine confidence score (0-100) |
+| `accession_number` | TEXT | Unique SEC constraint identifier |
+| `filed_at` | TIMESTAMPTZ | SEC registration timestamp |
+| `created_at` | TIMESTAMPTZ | Internal registration timestamp |
 
----
-
-## Design Rules (NEVER BREAK THESE)
-
-| Rule | Value |
-|------|-------|
-| Background | `#050505` |
-| Surface/card | `#0A0A0A` |
-| Border | `border-zinc-800` (hover: `border-zinc-600`) |
-| Accent | `#0066FF` (only for: primary buttons, active states, important links) |
-| Positive signal | `#00C805` |
-| Risk signal | `#FF3333` |
-| Neutral signal | `#71717A` |
-| Border radius | **0px everywhere** — use `rounded-none` on every element |
-| Fonts | Inter for UI, JetBrains Mono for tickers/confidence/timestamps |
-| Animations | **None** — transitions max 75ms, colors only |
-| Gradients | **Forbidden** |
+**API Translation Constraint:** The API translates `signal` to `classification` and `company` to `company_name` for precise client parity via `format_signal_for_api()`.
 
 ---
 
-## Environment Variables
+## Authentication Mechanism
 
-### Backend (`/backend/.env`)
-```
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_ANON_KEY=your-anon-key
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-TINYFISH_API_KEY=your-tinyfish-key
-ANTHROPIC_API_KEY=your-anthropic-key    # Placeholder OK — agent stores Pending
-TELEGRAM_BOT_TOKEN=your-bot-token
-TELEGRAM_CHAT_ID=@your_channel
-USE_TINYFISH=true
-TELEGRAM_ENABLED=true
-CORS_ORIGINS=*
-```
-
-### Frontend (`/frontend/.env`)
-```
-REACT_APP_SUPABASE_URL=https://your-project.supabase.co
-REACT_APP_SUPABASE_ANON_KEY=your-anon-key
-REACT_APP_BACKEND_URL=http://localhost:8001
-```
+1.  Client triggers signup intent via UI.
+2.  Route `POST /api/auth/signup` calls `supabase.auth.admin.create_user()` utilizing the backend service role, bypassing RLS.
+3.  Secondary automated login executes `sign_in_with_password()`, pushing standard JWT to frontend context.
+4.  React `AuthContext` consumes this JWT session locally and handles subsequent state verifications.
 
 ---
 
-## Service Constraints
+## EDGAR Agent Specification
 
-- Backend runs on `0.0.0.0:8001` — DO NOT change port
-- Frontend runs on port `3000` — DO NOT change port
-- All `/api/*` routes auto-proxy to backend via Kubernetes ingress
-- Hot reload is active — no need to restart for code changes
-- Restart required only when: changing `.env` files or installing new packages
-
----
-
-## EDGAR Agent
-
-- Polls SEC EDGAR EFTS every 5 minutes for 8-K filings
-- Deduplicates via `accession_number` against Supabase
-- TinyFish Web Agent API for text extraction (`USE_TINYFISH=true`)
-- Falls back to direct HTTP when TinyFish is disabled
-- Claude Sonnet (`claude-sonnet-4-20250514`) for classification
-- Graceful handling: missing `ANTHROPIC_API_KEY` → `signal: "Pending"`, `confidence: 0`
-- Control: `POST /api/edgar/start`, `POST /api/edgar/stop`, `GET /api/edgar/status`
+*   Interval: Configured to 300 seconds (5 minutes) targeting EDGAR EFTS APIs.
+*   Deduplication: Validation run against Supabase `accession_number` constraint prior to scraping.
+*   Scraping Engine: Defaults to TinyFish Web Agent API (`USE_TINYFISH=true`) with implicit HTTP regex fallback mechanism.
+*   LLM Classification: Google Gemini 1.5 Flash generates deterministic JSON payload representing regulatory impact.
+*   Resilience Mechanisms: Key-related authentication failures result in a `Pending` event status with silent alert suppression, preventing background service failure.
 
 ---
 
-## Telegram Bot
+## Strategic Roadmap Alignment
 
-- Bot handle: `@tinyfishafi_bot`
-- Sends alert on every new non-Pending signal
-- Emoji: 🟢 Positive, ⚪ Neutral, 🔴 Risk
-- `TELEGRAM_ENABLED=false` → silent skip
-- All calls wrapped in try/except — never crashes
+### Current: Phase 2 Core Engine Complete
+*   Supabase migration completed.
+*   EDGAR 8-K polling agent finalized.
+*   Gemini API classification stabilized.
+*   Telegram external notification service live.
+*   Real-time client telemetry implemented.
 
----
+### Incoming: Phase 3 Objectives
+1.  REST API abstraction for programmatic endpoint queries (Pro tier specific).
+2.  Algorithmic feedback loop interface allowing human validation on machine classifications.
+3.  Price correlation matrix cross-referencing signals with 1-hour market reactions.
 
-## Phase 2 Features (Implemented)
-
-1. ✅ Supabase migration (auth + data)
-2. ✅ EDGAR 8-K polling agent with AI classification
-3. ✅ Telegram bot alerts
-4. ✅ Dashboard realtime subscriptions (signals + watchlist)
-5. ✅ Agent status bar (UP/DOWN badge, poll time, filings count)
-6. ✅ Signal detail modal with EDGAR link
-
-## Phase 3 Tasks (What to Build Next)
-
-1. REST API access for Pro tier
-2. Signal feedback loop (user votes on accuracy)
-3. Market reaction correlation data
-4. Stripe billing (Retail $19, Pro $99)
-
----
-
-## Common Commands
-
-```bash
-# Start backend
-cd backend && uvicorn server:app --reload --port 8001
-
-# Start frontend
-cd frontend && yarn start
-
-# Start EDGAR agent
-curl -X POST http://localhost:8001/api/edgar/start
-
-# Stop EDGAR agent
-curl -X POST http://localhost:8001/api/edgar/stop
-
-# Check EDGAR agent status
-curl http://localhost:8001/api/edgar/status
-
-# Test Telegram bot
-cd backend && python3 telegram_bot.py
-
-# Install Python package
-cd backend && pip install <package>
-
-# Install JS package
-cd frontend && yarn add <package>
-```
+### Future: Phase 4
+1.  Processing support across wider filing ranges (10-K, 10-Q, S-1).
+2.  Institutional B2B white-label offerings.
+3.  Mobile progressive web app and international financial reporting integrations.
