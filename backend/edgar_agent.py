@@ -328,6 +328,10 @@ class EdgarAgent:
 
         # Resolve ticker from CIK
         entity_id = str(source.get("entity_id", source.get("cik", ""))).strip()
+        if not entity_id:
+            parts = accession_number.split("-")
+            entity_id = parts[0].lstrip("0") if parts else ""
+
         resolved_ticker = None
         if entity_id:
             resolved_ticker, resolved_name = self._resolve_ticker_from_cik(entity_id)
@@ -350,7 +354,7 @@ class EdgarAgent:
         # Extract filing text
         filing_text = None
         try:
-            filing_text = self._extract_filing_text(filing_url, accession_number)
+            filing_text = self._extract_filing_text(filing_url, accession_number, entity_id)
         except Exception as e:
             logger.error(f"[EXTRACT] Text extraction failed (continuing): {e}")
 
@@ -482,31 +486,30 @@ class EdgarAgent:
             logger.warning(f"[CIK] Resolution failed for {cik}: {e}")
         return "UNKNOWN", "Unknown Company"
 
-    def _extract_filing_text(self, filing_url, accession_number):
-        """Extract filing text. Fallback chain: TinyFish → SEC EFTS → HTTP scrape."""
+    def _extract_filing_text(self, filing_url, accession_number, cik):
+        """Extract filing text. Fallback chain: TinyFish → SEC EFTS → Atom Scrape."""
         # Step 1: TinyFish Web Agent
         if self.use_tinyfish and self.tinyfish_api_key:
             try:
                 text = self._extract_via_tinyfish(filing_url)
-                if text:
+                if text and len(text) > 100:
                     return text
             except Exception as e:
                 logger.warning(f"[EXTRACT] TinyFish failed: {e}")
 
-        # Step 2: SEC EFTS full-text search (gets the actual filing text!)
+        # Step 2: SEC EFTS full-text search
         try:
             text = self._extract_via_efts(accession_number)
-            if text:
-                logger.info(f"[EXTRACT] Got text via EFTS for {accession_number} ({len(text)} chars)")
+            if text and len(text) > 100:
                 return text
         except Exception as e:
             logger.warning(f"[EXTRACT] EFTS failed: {e}")
 
-        # Step 3: Direct HTTP scrape
-        return self._extract_via_http(filing_url, accession_number)
+        # Step 3: Direct HTTP atom feed scrape
+        return self._extract_via_http(filing_url, accession_number, cik)
 
     def _extract_via_efts(self, accession_number):
-        """Extract filing text from SEC EFTS full-text search API."""
+        """Fallback 1: SEC EDGAR full-text search API."""
         try:
             url = f"https://efts.sec.gov/LATEST/search-index?q=%22{accession_number}%22&forms=8-K"
             with httpx.Client(timeout=20, headers={"User-Agent": EDGAR_USER_AGENT}) as client:
@@ -515,91 +518,106 @@ class EdgarAgent:
                     data = resp.json()
                     hits = data.get("hits", {}).get("hits", [])
                     if hits:
-                        source = hits[0].get("_source", {})
-                        text = source.get("file_text", "")
+                        text = hits[0].get("_source", {}).get("file_text", "")
                         if text:
-                            return text[:15000]
+                            logger.info(f"[SEC_EFTS] Got {len(text)} chars")
+                            return text[:8000]
         except Exception as e:
-            logger.warning(f"[EFTS] Full-text search failed: {e}")
-        return None
+            logger.warning(f"[SEC_EFTS] Failed: {e}")
+        return ""
 
     def _extract_via_tinyfish(self, filing_url):
-        """Use TinyFish Web Agent API to navigate and extract filing text."""
+        """Use TinyFish Web Agent API (SSE stream) to navigate and extract filing text."""
+        import requests
+        if not self.use_tinyfish or not self.tinyfish_api_key:
+            return ""
+            
+        goal = (
+            "Extract the full text content of this SEC 8-K filing. "
+            "Return the complete text of all items disclosed, including any financial figures, "
+            "executive changes, agreements, or events described. "
+            "Return as plain text JSON: {\"text\": \"<full filing content>\"}"
+        )
         try:
-            with httpx.Client(timeout=120) as client:
-                response = client.post(
-                    f"{TINYFISH_BASE_URL}/v1/web-agent/tasks",
-                    headers={
-                        "Authorization": f"Bearer {self.tinyfish_api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "url": filing_url,
-                        "instructions": "Navigate to this SEC EDGAR filing index page. Find the primary HTM or TXT exhibit link (usually the main document, not the XML). Click on it. Extract and return the full document text content.",
-                        "return_content": True,
-                    },
-                )
-                response.raise_for_status()
-                result = response.json()
-
-                task_id = result.get("task_id", result.get("id", ""))
-                if task_id:
-                    for _ in range(30):
-                        time.sleep(10)
-                        status_resp = client.get(
-                            f"{TINYFISH_BASE_URL}/v1/web-agent/tasks/{task_id}",
-                            headers={"Authorization": f"Bearer {self.tinyfish_api_key}"},
-                        )
-                        status_data = status_resp.json()
-                        if status_data.get("status") in ("completed", "done"):
-                            return status_data.get("content", status_data.get("result", ""))
-                        if status_data.get("status") in ("failed", "error"):
-                            logger.warning(f"[TINYFISH] Task failed: {status_data}")
+            with requests.post(
+                "https://agent.tinyfish.ai/v1/automation/run-sse",
+                headers={
+                    "X-API-Key": self.tinyfish_api_key,
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "url": filing_url,
+                    "goal": goal,
+                    "browser_profile": "stealth"
+                },
+                stream=True,
+                timeout=90
+            ) as response:
+                if response.status_code != 200:
+                    logger.error(f"[TINYFISH] HTTP {response.status_code}")
+                    return ""
+                
+                result_text = ""
+                for line in response.iter_lines():
+                    line = line.decode("utf-8") if isinstance(line, bytes) else line
+                    if not line or not line.startswith("data:"):
+                        continue
+                    try:
+                        raw = line[5:].strip()
+                        if not raw:
+                            continue
+                        event = json.loads(raw)
+                        
+                        if event.get("type") == "PROGRESS":
+                            logger.debug(f"[TINYFISH] Progress: {event.get('message', '')}")
+                        elif event.get("type") == "COMPLETE":
+                            if event.get("status") == "COMPLETED":
+                                result = event.get("resultJson") or event.get("result", "")
+                                if isinstance(result, dict):
+                                    result_text = result.get("text", str(result))
+                                elif isinstance(result, str):
+                                    try:
+                                        parsed = json.loads(result)
+                                        result_text = parsed.get("text", result)
+                                    except json.JSONDecodeError:
+                                        result_text = result
+                                logger.info(f"[TINYFISH] Success: {len(result_text)} chars extracted")
+                            else:
+                                logger.warning(f"[TINYFISH] Run ended with status: {event.get('status')}")
                             break
-
-                return result.get("content", result.get("text", ""))
+                        elif event.get("type") == "ERROR":
+                            logger.error(f"[TINYFISH] Agent error: {event.get('message', event)}")
+                            break
+                    except json.JSONDecodeError:
+                        continue
+                return result_text[:8000]
         except Exception as e:
             logger.error(f"[TINYFISH] Extraction failed: {e}")
-            return None
+            return ""
 
-    def _extract_via_http(self, filing_url, accession_number):
-        """Fallback: directly download filing text via HTTP with redirect following."""
+    def _extract_via_http(self, filing_url, accession_number, cik):
+        """Fallback 2: SEC EDGAR atom feed — gets filing description"""
+        if not cik:
+            return ""
         try:
-            with httpx.Client(timeout=30, headers={"User-Agent": EDGAR_USER_AGENT}, follow_redirects=True) as client:
-                response = client.get(filing_url)
-                if response.status_code == 200:
-                    html = response.text
-                    doc_links = re.findall(r'href="([^"]*\.(?:htm|txt))"', html, re.IGNORECASE)
-                    for link in doc_links:
-                        if "index" in link.lower() or link.endswith(".xml"):
-                            continue
-                        if link.startswith("http"):
-                            doc_url = link
-                        elif link.startswith("/"):
-                            doc_url = f"{EDGAR_BASE_URL}{link}"
-                        else:
-                            base = filing_url.rsplit("/", 1)[0]
-                            doc_url = f"{base}/{link}"
-
-                        try:
-                            doc_resp = client.get(doc_url)
-                            if doc_resp.status_code == 200:
-                                text = re.sub(r'<[^>]+>', ' ', doc_resp.text)
-                                text = re.sub(r'\s+', ' ', text).strip()
-                                return text[:15000]
-                        except Exception as e:
-                            logger.warning(f"[HTTP] Failed to fetch doc {doc_url}: {e}")
-                            continue
-
-                    # If no doc links found, use the index page text
-                    text = re.sub(r'<[^>]+>', ' ', html)
-                    text = re.sub(r'\s+', ' ', text).strip()
-                    return text[:15000]
-                else:
-                    logger.warning(f"[HTTP] Filing URL returned HTTP {response.status_code}")
+            import xml.etree.ElementTree as ET
+            url = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={cik}&type=8-K&dateb=&owner=include&count=5&output=atom"
+            with httpx.Client(timeout=15, headers={"User-Agent": EDGAR_USER_AGENT}, follow_redirects=True) as client:
+                resp = client.get(url)
+                if resp.status_code == 200:
+                    root = ET.fromstring(resp.text)
+                    ns = {"atom": "http://www.w3.org/2005/Atom"}
+                    for entry in root.findall("atom:entry", ns):
+                        entry_id = entry.findtext("atom:id", default="", namespaces=ns)
+                        if accession_number.replace("-", "") in entry_id.replace("-", ""):
+                            summary = entry.findtext("atom:summary", default="", namespaces=ns)
+                            title = entry.findtext("atom:title", default="", namespaces=ns)
+                            if summary or title:
+                                logger.info(f"[SEC_ATOM] Got metadata for {accession_number}")
+                                return f"{title}\\n{summary}"
         except Exception as e:
-            logger.error(f"[HTTP] Extraction failed: {e}")
-        return None
+            logger.warning(f"[SEC_ATOM] Failed: {e}")
+        return ""
 
     def _classify_filing(self, filing_text):
         """Legacy: Classify filing using Gemini API (used only as fallback)."""
