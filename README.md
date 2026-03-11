@@ -123,7 +123,7 @@ tinyfishafi/
     public/
       sw.js                           # Service worker for browser push notifications
     src/
-      App.js                          # Client-side routing
+      App.js                          # Client-side routing (/, /dashboard, /watchlist, /signal/:id, /settings)
       lib/supabase.js                # Supabase client singleton
       context/AuthContext.jsx         # Authentication state management
       hooks/
@@ -131,9 +131,13 @@ tinyfishafi/
       pages/
         Landing.jsx                   # Marketing landing page
         Auth.jsx                      # Login and signup forms
-        Dashboard.jsx                 # Real-time alert feed with caching + skeletons
+        Dashboard.jsx                 # Categorized feed with accordion sections + right panel
+        Watchlist.jsx                 # Watchlist management with inline filing expand
+        Signal.jsx                    # Individual signal detail page
+        Settings.jsx                  # User settings page
       components/
-        AlertCard.jsx                 # Dense 4-column signal card
+        AppShell.jsx                  # Shared layout shell (sidebar + status bar)
+        AlertCard.jsx                 # Compact 3-column signal card (ticker | summary | score+time)
         SignalSkeleton.jsx            # Shimmer loading placeholders
         SignalDetailModal.jsx         # Full signal detail with event type + impact score
         WatchlistPanel.jsx            # Ticker search via backend proxy
@@ -204,10 +208,14 @@ The frontend subscribes to Supabase `postgres_changes` on the `signals` table. N
 - Pulsing green dot when agent is UP, red status bar when DOWN
 - Live countdown to next poll (ticks every second)
 - Filings processed counter (updates via realtime)
-- ALL/WATCHLIST feed tabs with WATCHED badge on matching cards
+- **Categorized feed:** signals grouped by event type (EARNINGS & FINANCIAL, LEADERSHIP & CORP EVENTS, REGULATORY & LEGAL, ROUTINE FILINGS)
+- **Accordion sections:** each category is a collapsible card with SHOW/HIDE button, ticker previews when collapsed, and count badges
+- **FeedSummaryBar:** quick-glance category pill counts in the header
+- ALL/WATCHLIST/RISK/OPPORTUNITY filter tabs with count badges
 - **★ Quick-add button** on each card to add ticker to watchlist
-- **Impact bar** (orange/amber/gray) and **event type badge** on each card
+- **Impact bar** and **event type label** on each compact 3-column card
 - Yahoo Finance autocomplete for watchlist via backend proxy
+- **Right panel:** TODAY stats (bordered cards), TOP SIGNALS (mini-cards with colored borders), MARKET BRIEF (AI summary card), WATCHLIST zone
 - 30-second relative timestamp auto-updates
 - **Market Brief age counter** ("42s ago" / "3m ago")
 
@@ -317,12 +325,13 @@ Constraint: UNIQUE(user_id, ticker). Maximum 10 tickers per user.
 ## Design System
 
 - Background: `#050505` (dark mode only)
-- Surface: `#0A0A0A`
+- Surface: `#0A0A0A`, Cards: `#0c0c0c`
 - Accent: `#0066FF`
 - Signal colors: Positive `#00C805`, Risk `#FF3333`, Neutral `#71717A`
-- Border radius: 0px globally
+- Category colors: Earnings `#00C805`, Leadership `#FF6B00`, Legal `#FF3333`, Routine `#555`
+- Border radius: 4px (cards), 6px (accordion panels), 10px (count badges)
 - Fonts: Inter (UI), JetBrains Mono (tickers, data, timestamps)
-- Animations: Subtle only (75ms transitions, pulse for live indicators)
+- Animations: Subtle only (120ms transitions, pulse for live indicators)
 
 ---
 
@@ -361,7 +370,20 @@ Constraint: UNIQUE(user_id, ticker). Maximum 10 tickers per user.
 - Daily email digest endpoint (Resend integration)
 - Dashboard performance: parallel fetching, sessionStorage caching, skeleton UI
 
-### Phase 5: Enterprise (Planned)
+### Phase 5: Categorized Feed, Multi-Page & Premium Landing (Complete)
+- Multi-page architecture (AppShell, Dashboard, Watchlist, Signal, Settings)
+- Premium Landing Page redesign: dot-grid background, gradient clipping, staggered `@keyframes`, glowing `lucide-react` feature cards and glassmorphic navbar.
+- Categorized signal feed with CATEGORY_MAP (EARNINGS, LEADERSHIP, REGULATORY, ROUTINE)
+- Accordion category sections with SHOW/HIDE button and collapsed ticker previews
+- FeedSummaryBar with category count pills
+- Compact 3-column AlertCard (ticker+event | summary | time+watch+impact)
+- Priority sorting: watched → signal type → impact → date
+- Routine filings collapsed by default with ghost/junk filtering
+- Right panel polish: bordered stat cards, mini signal cards, AI brief card
+- Watchlist page with inline filing expand (opens signal detail in new tab)
+- GET /api/signals/:id endpoint for individual signal pages
+
+### Phase 6: Enterprise (Planned)
 - Form 4, 10-K, 10-Q, S-1 filing support via plugin processors
 - REST API gateway for Pro-tier subscribers
 - Per-user Telegram alerts (personal chat IDs)

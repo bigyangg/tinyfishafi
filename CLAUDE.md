@@ -4,7 +4,7 @@
 
 AFI (Market Event Intelligence) is a real-time signal platform for traders. It polls SEC EDGAR for 8-K filings, classifies market events with Google Gemini 2.5 Flash, enriches with price data and news sentiment, scores impact (0–100), and delivers structured signals through a live dashboard, Telegram alerts, browser push notifications, and email digests.
 
-**Current state:** Phase 4 complete. Proactive alerting with smart Telegram thresholds (watchlist-aware), browser push notifications via service worker, daily email digest endpoint, and dashboard performance optimizations (parallel fetch, caching, skeleton UI).
+**Current state:** Phase 5 complete. Categorized feed with accordion sections (EARNINGS, LEADERSHIP, REGULATORY, ROUTINE), multi-page architecture (AppShell, Dashboard, Watchlist, Signal, Settings), compact 3-column AlertCard, polished right panel with bordered cards, and FeedSummaryBar with category pills.
 
 ---
 
@@ -40,8 +40,13 @@ All backend routes use the `/api/` prefix.
 - `price_tracker.py` - Scheduled T+1h/T+24h/T+3d price checks. Database rows, not asyncio.sleep. Survives restarts.
 
 ### Frontend
-- `Dashboard.jsx` - Real-time alert feed. Parallel data fetching via `Promise.allSettled`. sessionStorage cache for signals (90s TTL), localStorage cache for watchlist (optimistic updates). Skeleton loading UI. Browser push notification prompt. Health check polling (30s).
-- `AlertCard.jsx` - Dense 4-column signal card.
+- `App.js` - Client-side routing: `/`, `/dashboard`, `/watchlist`, `/signal/:id`, `/settings`.
+- `AppShell.jsx` - Shared layout shell with sidebar navigation and agent status bar.
+- `Dashboard.jsx` - Categorized signal feed. `CATEGORY_MAP` groups signals into EARNINGS & FINANCIAL, LEADERSHIP & CORP EVENTS, REGULATORY & LEGAL, ROUTINE FILINGS. `CategorySection` accordion with sticky headers, SHOW/HIDE toggle, collapsed ticker previews, and count badges. `FeedSummaryBar` with category pills in header. Priority sorting: watched → signal type → impact → date. Ghost/junk filtering. Right panel: `TodayStats` (bordered cards), `TopSignals` (mini-cards with colored borders and impact-colored scores), `MarketBrief` (AI summary in bordered card), `WatchlistZone`.
+- `AlertCard.jsx` - Compact 3-column grid card: ticker+event | summary+company | time+watch+impact bar. Supports `dimmed` prop for routine filings. 4px border-radius, visible borders.
+- `Watchlist.jsx` - Watchlist management with inline filing expand. Clicking a filing opens `/signal/:id` in new tab.
+- `Signal.jsx` - Individual signal detail page. Fetches via `GET /api/signals/:id`.
+- `Settings.jsx` - User settings page.
 - `SignalSkeleton.jsx` - Shimmer loading placeholders (SignalSkeleton, StatsSkeleton, WatchlistSkeleton).
 - `WatchlistPanel.jsx` - Ticker management via **backend proxy** (`/api/ticker/search`). Autocomplete dropdown.
 - `SignalDetailModal.jsx` - Full signal detail overlay with **event type**, **impact score bar**, SEC EDGAR link.
@@ -79,12 +84,13 @@ API maps: `signal` -> `classification`, `company` -> `company_name` via `format_
 
 ## Design Rules (Non-Negotiable)
 
-1. Background: `#050505`, Surface: `#0A0A0A`
+1. Background: `#050505`, Surface: `#0A0A0A`, Cards: `#0c0c0c`
 2. Accent: `#0066FF` (interactive elements only)
 3. Signals: Positive `#00C805`, Risk `#FF3333`, Neutral `#71717A`
-4. Border radius: 0px everywhere
-5. Fonts: Inter (UI), JetBrains Mono (tickers, numbers, timestamps)
-6. Dark mode only. No gradients. Animations capped at 75ms.
+4. Category colors: Earnings `#00C805`, Leadership `#FF6B00`, Legal `#FF3333`, Routine `#555`
+5. Border radius: 4px (cards/buttons), 6px (accordion panels), 10px (count badges)
+6. Fonts: Inter (UI), JetBrains Mono (tickers, numbers, timestamps)
+7. Dark mode only. No gradients. Animations capped at 120ms.
 
 ---
 
@@ -150,4 +156,6 @@ Log format includes accession number, ticker, filing type, company name, and exc
 
 **Phase 4 (Complete):** Smart Telegram thresholds (watchlist-aware, multi-factor), rich HTML alerts, browser push notifications (service worker + permission prompt), daily email digest endpoint (Resend), dashboard performance (parallel fetch, caching, skeleton UI), sidebar cleanup.
 
-**Phase 5 (Planned):** Form 4 XML parser, 10-K/10-Q section extractor, 13D materiality filter, per-user Telegram chat IDs, Pro-tier REST API, Stripe billing.
+**Phase 5 (Complete):** Multi-page architecture (AppShell, Dashboard, Watchlist, Signal, Settings). Premium Landing Page redesign with CSS @keyframes, dot-grid background, glassmorphism, glowing lucide-react feature cards. Categorized feed with CATEGORY_MAP (event_type → groups: EARNINGS, LEADERSHIP, REGULATORY, ROUTINE). CategorySection accordion with SHOW/HIDE toggle, collapsed ticker previews, count badges. Compact 3-column AlertCard. Priority sorting (watched → signal → impact → date). Ghost/junk filtering. Polished right panel with bordered stat cards, mini signal cards, AI brief card. Watchlist page with inline filing expand. GET /api/signals/:id endpoint.
+
+**Phase 6 (Planned):** Form 4 XML parser, 10-K/10-Q section extractor, 13D materiality filter, per-user Telegram chat IDs, Pro-tier REST API, Stripe billing.

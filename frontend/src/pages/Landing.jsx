@@ -1,16 +1,11 @@
-import { Link, useNavigate } from 'react-router-dom';
-import { Shield, Zap, BarChart2, ArrowRight, Clock, CheckCircle } from 'lucide-react';
-
-const NAV_LINKS = [
-  { label: 'Features', href: '#features' },
-  { label: 'Pricing', href: '/pricing' },
-];
+import { useNavigate } from 'react-router-dom';
+import { Zap, BarChart2, Bell, ArrowRight, Activity, Shield, Cpu } from 'lucide-react';
 
 const STATS = [
   { value: '<2min', label: 'Detection Speed' },
   { value: '8-K', label: 'Filing Coverage' },
   { value: '0–100', label: 'Impact Score' },
-  { value: '24/7', label: 'Market Monitoring' },
+  { value: '24/7', label: 'SEC Monitoring' },
 ];
 
 const FEATURES = [
@@ -18,182 +13,349 @@ const FEATURES = [
     icon: Zap,
     title: 'Real-Time Detection',
     desc: 'Continuous EDGAR monitoring detects new 8-K filings within 2 minutes of publication. No manual checking, no lag.',
+    color: '#FFB300',
   },
   {
-    icon: BarChart2,
-    title: 'Structured Signal Output',
-    desc: 'Each filing is classified (Positive, Neutral, Risk), scored for market impact (0–100), and summarized in plain English. One glance, full context.',
+    icon: Cpu,
+    title: 'AI Signal Classification',
+    desc: 'Each filing is classified (Positive, Neutral, Risk), scored for market impact (0–100), and categorized by event type. One glance, full context.',
+    color: '#00C805',
   },
   {
-    icon: Shield,
-    title: 'Multi-Channel Delivery',
-    desc: 'Signals appear on your dashboard in real time. High-impact alerts push to Telegram instantly. No noise — only the events that matter.',
+    icon: Bell,
+    title: 'Multi-Channel Alerts',
+    desc: 'Signals appear on your categorized dashboard in real time. High-impact alerts push to Telegram and browser notifications instantly.',
+    color: '#0066FF',
   },
 ];
 
-const HOW_IT_WORKS = [
-  { step: '01', title: 'Filing Detected', desc: 'SEC publishes an 8-K. AFI detects it within 2 minutes and extracts the full filing text from EDGAR.' },
-  { step: '02', title: 'Signal Generated', desc: 'Filing is classified, scored for market impact, enriched with current price and news sentiment. Event type identified.' },
-  { step: '03', title: 'Alert Delivered', desc: 'Structured signal appears on your dashboard in real time. High-impact events push to Telegram before the news cycle reacts.' },
+const STEPS = [
+  { num: '01', title: 'Filing Detected', desc: 'SEC publishes an 8-K. AFI detects it within 2 minutes and extracts the full filing text from EDGAR.' },
+  { num: '02', title: 'Signal Generated', desc: 'Filing is classified by AI, scored for impact, enriched with price data and news sentiment. Event type identified.' },
+  { num: '03', title: 'Alert Delivered', desc: 'Structured signal appears on your categorized dashboard. High-impact events push to Telegram before news reacts.' },
 ];
 
 export default function Landing() {
   const navigate = useNavigate();
 
+  const btn = (primary) => ({
+    padding: '12px 28px',
+    background: primary ? '#0066FF' : 'transparent',
+    border: primary ? '1px solid #0066FF' : '1px solid #2a2a2a',
+    borderRadius: '4px',
+    color: '#fff',
+    fontSize: '14px',
+    fontWeight: 600,
+    cursor: 'pointer',
+    transition: 'all 200ms cubic-bezier(0.16, 1, 0.3, 1)',
+    fontFamily: "'Inter', sans-serif",
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '8px',
+    letterSpacing: '0.02em',
+    boxShadow: primary ? '0 0 16px rgba(0, 102, 255, 0.25)' : 'none',
+  });
+
   return (
-    <div className="min-h-screen bg-[#050505] text-white">
-      {/* NAV */}
-      <nav className="border-b border-zinc-800 px-6 py-4 flex items-center justify-between sticky top-0 bg-[#050505] z-50" data-testid="landing-nav">
-        <Link to="/" className="font-mono font-bold text-lg text-white tracking-wider" data-testid="nav-logo">AFI</Link>
-        <div className="hidden md:flex items-center gap-6">
-          {NAV_LINKS.map(l => (
-            <Link
-              key={l.label}
-              to={l.href}
-              className="text-sm text-zinc-400 hover:text-white transition-colors duration-75"
-              data-testid={`nav-${l.label.toLowerCase()}`}
-            >
-              {l.label}
-            </Link>
-          ))}
+    <div style={{
+      minHeight: '100vh',
+      backgroundColor: '#030303',
+      color: '#fff',
+      fontFamily: "'Inter', sans-serif",
+      position: 'relative'
+    }}>
+      {/* CSS Animations & Utilities */}
+      <style>{`
+        @keyframes fadeUp {
+          from { opacity: 0; transform: translateY(20px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-up {
+          animation: fadeUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+          opacity: 0;
+        }
+        .delay-1 { animation-delay: 0.1s; }
+        .delay-2 { animation-delay: 0.2s; }
+        .delay-3 { animation-delay: 0.3s; }
+        
+        .feature-card:hover {
+          transform: translateY(-4px);
+          border-color: #333 !important;
+        }
+        .step-card:hover .step-num {
+          color: #222 !important;
+          transform: scale(1.05);
+        }
+      `}</style>
+
+      {/* Background Dot Grid with Top Mask */}
+      <div style={{
+        position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+        backgroundImage: 'radial-gradient(#222 1px, transparent 1px)',
+        backgroundSize: '24px 24px',
+        opacity: 0.5,
+        maskImage: 'linear-gradient(to bottom, black 0%, transparent 80%)',
+        WebkitMaskImage: 'linear-gradient(to bottom, black 0%, transparent 80%)',
+        pointerEvents: 'none',
+        zIndex: 0
+      }} />
+
+      {/* ── NAV ── */}
+      <nav style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '16px 32px',
+        borderBottom: '1px solid rgba(255,255,255,0.05)',
+        position: 'sticky', top: 0, zIndex: 50,
+        background: 'rgba(3, 3, 3, 0.7)',
+        backdropFilter: 'blur(16px)',
+        WebkitBackdropFilter: 'blur(16px)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', zIndex: 10 }}>
+          <span style={{ fontWeight: 900, fontSize: '18px', letterSpacing: '0.1em', color: '#fff' }}>AFI</span>
+          <span style={{ fontSize: '10px', color: '#555', letterSpacing: '0.08em', borderLeft: '1px solid #222', paddingLeft: '12px', fontWeight: 600 }}>
+            MARKET INTELLIGENCE
+          </span>
         </div>
-        <div className="flex items-center gap-3">
-          <Link
-            to="/auth"
-            className="text-sm text-zinc-400 hover:text-white transition-colors duration-75 px-3 py-2"
-            data-testid="nav-login"
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', zIndex: 10 }}>
+          <button
+            onClick={() => navigate('/auth')}
+            style={{ ...btn(false), padding: '8px 16px', fontSize: '13px', border: 'none', color: '#888', boxShadow: 'none' }}
+            onMouseEnter={e => e.currentTarget.style.color = '#fff'}
+            onMouseLeave={e => e.currentTarget.style.color = '#888'}
           >
             Log In
-          </Link>
+          </button>
           <button
             onClick={() => navigate('/auth?mode=signup')}
-            className="bg-[#0066FF] hover:bg-[#0052CC] text-white text-sm font-medium px-4 py-2 transition-colors duration-75"
-            data-testid="nav-cta"
+            style={{ ...btn(true), padding: '8px 20px', fontSize: '13px' }}
+            onMouseEnter={e => { e.currentTarget.style.background = '#0052CC'; e.currentTarget.style.boxShadow = '0 0 24px rgba(0, 102, 255, 0.4)'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = '#0066FF'; e.currentTarget.style.boxShadow = '0 0 16px rgba(0, 102, 255, 0.25)'; }}
           >
-            Get Started
+            Get Started <ArrowRight size={14} />
           </button>
         </div>
       </nav>
 
-      {/* HERO */}
-      <section className="px-6 py-24 md:py-36 max-w-5xl mx-auto" data-testid="hero-section">
-        <div className="inline-flex items-center gap-2 border border-zinc-800 px-3 py-1 mb-8">
-          <span className="w-1.5 h-1.5 bg-[#00C805] rounded-full"></span>
-          <span className="font-mono text-[10px] uppercase tracking-widest text-zinc-400">Monitoring EDGAR — Live Now</span>
-        </div>
-        <h1 className="font-sans font-bold text-5xl md:text-6xl lg:text-7xl tracking-tight text-white leading-[1.05] mb-6" data-testid="hero-headline">
-          Real-Time Market<br />Event Intelligence.
-        </h1>
-        <p className="text-zinc-400 text-lg max-w-xl mb-10 leading-relaxed" data-testid="hero-subheading">
-          AFI detects SEC filings the moment they drop, classifies the market event, scores impact, and delivers structured signals to your dashboard and Telegram — before the news cycle reacts.
-        </p>
-        <div className="flex items-center gap-4" data-testid="hero-ctas">
-          <button
-            onClick={() => navigate('/auth?mode=signup')}
-            className="bg-[#0066FF] hover:bg-[#0052CC] text-white text-sm font-medium px-6 py-3 flex items-center gap-2 transition-colors duration-75"
-            data-testid="hero-cta-primary"
-          >
-            Start Monitoring
-            <ArrowRight size={14} />
-          </button>
-          <Link
-            to="/pricing"
-            className="text-sm text-zinc-400 hover:text-white border border-zinc-800 hover:border-zinc-600 px-6 py-3 transition-colors duration-75"
-            data-testid="hero-cta-secondary"
-          >
-            See How It Works
-          </Link>
-        </div>
-      </section>
+      <div style={{ position: 'relative', zIndex: 10 }}>
+        {/* ── HERO ── */}
+        <section style={{ maxWidth: '900px', margin: '0 auto', padding: '100px 32px 80px', textAlign: 'center' }}>
 
-      {/* STATS BAR */}
-      <section className="border-t border-b border-zinc-800 px-6 py-8" data-testid="stats-section">
-        <div className="max-w-5xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-8">
-          {STATS.map(s => (
-            <div key={s.label} className="text-center" data-testid={`stat-${s.label.replace(/\s+/g, '-').toLowerCase()}`}>
-              <div className="font-mono font-bold text-2xl text-white mb-1">{s.value}</div>
-              <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold">{s.label}</div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* FEATURES */}
-      <section id="features" className="px-6 py-24 max-w-5xl mx-auto" data-testid="features-section">
-        <div className="mb-12">
-          <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold font-mono mb-3">Why AFI</div>
-          <h2 className="font-sans font-bold text-3xl text-white">Institutional-grade signal infrastructure.<br />Built for individual traders.</h2>
-        </div>
-        <div className="grid md:grid-cols-3 gap-px bg-zinc-800">
-          {FEATURES.map(f => {
-            const Icon = f.icon;
-            return (
-              <div key={f.title} className="bg-[#050505] p-8" data-testid={`feature-${f.title.split(' ')[0].toLowerCase()}`}>
-                <Icon size={20} className="text-[#0066FF] mb-4" />
-                <h3 className="font-sans font-semibold text-white text-base mb-3">{f.title}</h3>
-                <p className="text-zinc-500 text-sm leading-relaxed">{f.desc}</p>
-              </div>
-            );
-          })}
-        </div>
-      </section>
-
-      {/* HOW IT WORKS */}
-      <section className="border-t border-zinc-800 px-6 py-24" data-testid="how-it-works-section">
-        <div className="max-w-5xl mx-auto">
-          <div className="mb-12">
-            <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold font-mono mb-3">Signal Pipeline</div>
-            <h2 className="font-sans font-bold text-3xl text-white">From SEC filing to actionable signal.</h2>
+          <div className="animate-fade-up" style={{
+            display: 'inline-flex', alignItems: 'center', gap: '8px',
+            background: 'rgba(0, 200, 5, 0.08)', border: '1px solid rgba(0, 200, 5, 0.2)',
+            borderRadius: '24px', padding: '6px 16px', marginBottom: '32px',
+            backdropFilter: 'blur(4px)',
+          }}>
+            <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#00C805', boxShadow: '0 0 8px #00C805', animation: 'pulse-green 2s ease-in-out infinite' }} />
+            <span style={{ fontSize: '11px', color: '#00C805', fontWeight: 700, letterSpacing: '0.1em' }}>
+              MONITORING EDGAR — LIVE
+            </span>
           </div>
-          <div className="grid md:grid-cols-3 gap-8">
-            {HOW_IT_WORKS.map(h => (
-              <div key={h.step} className="border-t-2 border-[#0066FF] pt-6" data-testid={`step-${h.step}`}>
-                <div className="font-mono text-[10px] text-zinc-600 mb-4 uppercase tracking-widest">{h.step}</div>
-                <h3 className="font-mono font-bold text-white text-sm uppercase tracking-wider mb-3">{h.title}</h3>
-                <p className="text-zinc-500 text-sm leading-relaxed">{h.desc}</p>
+
+          <h1 className="animate-fade-up delay-1" style={{
+            fontSize: 'clamp(40px, 6vw, 76px)',
+            fontWeight: 800,
+            lineHeight: 1.05,
+            marginBottom: '28px',
+            letterSpacing: '-0.03em',
+            background: 'linear-gradient(180deg, #ffffff 30%, #777777 100%)',
+            WebkitBackgroundClip: 'text',
+            WebkitTextFillColor: 'transparent',
+            filter: 'drop-shadow(0 4px 24px rgba(255,255,255,0.05))'
+          }}>
+            Autonomous Market<br />Event Intelligence.
+          </h1>
+
+          <p className="animate-fade-up delay-2" style={{
+            fontSize: '18px', color: '#888', maxWidth: '640px', margin: '0 auto 48px',
+            lineHeight: 1.6, fontWeight: 400,
+          }}>
+            AFI detects SEC 8-K filings the moment they drop, classifies the market event with high-speed AI, scores impact, and delivers signals to your dashboard and Telegram — before the news cycle reacts.
+          </p>
+
+          <div className="animate-fade-up delay-3" style={{ display: 'flex', justifyContent: 'center', gap: '16px', flexWrap: 'wrap' }}>
+            <button
+              onClick={() => navigate('/auth?mode=signup')}
+              style={{ ...btn(true), padding: '14px 32px', fontSize: '15px' }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#0052CC'; e.currentTarget.style.boxShadow = '0 0 32px rgba(0, 102, 255, 0.4)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = '#0066FF'; e.currentTarget.style.boxShadow = '0 0 16px rgba(0, 102, 255, 0.25)'; }}
+            >
+              Start Monitoring
+            </button>
+            <button
+              onClick={() => document.getElementById('features')?.scrollIntoView({ behavior: 'smooth' })}
+              style={{ ...btn(false), padding: '14px 32px', fontSize: '15px' }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#111'; e.currentTarget.style.borderColor = '#444'; e.currentTarget.style.color = '#fff'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = '#2a2a2a'; e.currentTarget.style.color = '#fff'; }}
+            >
+              See How It Works
+            </button>
+          </div>
+        </section>
+
+        {/* ── STATS BAR ── */}
+        <section style={{ borderTop: '1px solid rgba(255,255,255,0.05)', borderBottom: '1px solid rgba(255,255,255,0.05)', background: 'rgba(0,0,0,0.3)' }}>
+          <div style={{
+            maxWidth: '1000px', margin: '0 auto',
+            display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
+          }}>
+            {STATS.map((s, i) => (
+              <div key={s.label} style={{
+                textAlign: 'center', padding: '32px 16px',
+                borderRight: i < 3 ? '1px solid rgba(255,255,255,0.05)' : 'none',
+              }}>
+                <div style={{ fontSize: '32px', fontWeight: 800, color: '#fff', marginBottom: '8px', fontFamily: "'JetBrains Mono', monospace", letterSpacing: '-0.02em', textShadow: '0 0 20px rgba(255,255,255,0.1)' }}>
+                  {s.value}
+                </div>
+                <div style={{ fontSize: '10px', color: '#666', letterSpacing: '0.15em', fontWeight: 600, textTransform: 'uppercase' }}>
+                  {s.label}
+                </div>
               </div>
             ))}
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* CTA SECTION */}
-      <section className="border-t border-zinc-800 px-6 py-24" data-testid="bottom-cta-section">
-        <div className="max-w-5xl mx-auto flex flex-col md:flex-row items-start md:items-center justify-between gap-8">
-          <div>
-            <h2 className="font-sans font-bold text-3xl text-white mb-3">Stop reacting to headlines. Start reading the filings.</h2>
-            <p className="text-zinc-500 text-sm">Free to start. Full dashboard access. Real-time signals from day one.</p>
+        {/* ── FEATURES ── */}
+        <section id="features" style={{ maxWidth: '1000px', margin: '0 auto', padding: '100px 32px' }}>
+          <div style={{ marginBottom: '64px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+              <Shield size={14} color="#0066FF" />
+              <span style={{ fontSize: '10px', color: '#0066FF', letterSpacing: '0.15em', fontWeight: 700 }}>INSTITUTIONAL GRADE</span>
+            </div>
+            <h2 style={{ fontSize: '36px', fontWeight: 800, lineHeight: 1.15, letterSpacing: '-0.02em' }}>
+              Signal infrastructure.<br />
+              <span style={{ color: '#666' }}>Built for individual traders.</span>
+            </h2>
           </div>
-          <button
-            onClick={() => navigate('/auth?mode=signup')}
-            className="bg-[#0066FF] hover:bg-[#0052CC] text-white text-sm font-medium px-8 py-3 flex items-center gap-2 transition-colors duration-75 shrink-0"
-            data-testid="bottom-cta-button"
-          >
-            Start Monitoring
-            <ArrowRight size={14} />
-          </button>
-        </div>
-      </section>
 
-      {/* FOOTER */}
-      <footer className="border-t border-zinc-800 px-6 py-8" data-testid="footer">
-        <div className="max-w-5xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <span className="font-mono font-bold text-sm text-white">AFI</span>
-            <span className="text-zinc-700 text-xs">Market Event Intelligence</span>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '24px' }}>
+            {FEATURES.map((f, i) => (
+              <div key={f.title} className="feature-card animate-fade-up" style={{
+                background: 'linear-gradient(180deg, #0a0a0a 0%, #050505 100%)',
+                border: '1px solid #161616',
+                borderRadius: '12px',
+                padding: '32px 28px',
+                position: 'relative',
+                overflow: 'hidden',
+                animationDelay: `${i * 0.15}s`,
+                transition: 'all 300ms ease',
+                boxShadow: '0 4px 24px rgba(0,0,0,0.5)'
+              }}>
+                <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '2px', background: f.color, opacity: 0.8, boxShadow: `0 0 12px ${f.color}` }} />
+                <div style={{
+                  width: '48px', height: '48px', borderRadius: '8px', background: `${f.color}15`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '24px',
+                  border: `1px solid ${f.color}30`
+                }}>
+                  <f.icon size={22} color={f.color} strokeWidth={2} />
+                </div>
+                <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '12px', color: '#fff', letterSpacing: '-0.01em' }}>{f.title}</h3>
+                <p style={{ fontSize: '14px', color: '#888', lineHeight: 1.6, margin: 0 }}>{f.desc}</p>
+              </div>
+            ))}
           </div>
-          <div className="flex items-center gap-6 text-xs text-zinc-600">
-            <span>© 2026 AFI</span>
-            <span className="hover:text-zinc-400 cursor-pointer transition-colors duration-75">Terms</span>
-            <span className="hover:text-zinc-400 cursor-pointer transition-colors duration-75">Privacy</span>
-            <span className="hover:text-zinc-400 cursor-pointer transition-colors duration-75">Disclaimer</span>
+        </section>
+
+        {/* ── PIPELINE (HOW IT WORKS) ── */}
+        <section style={{ borderTop: '1px solid rgba(255,255,255,0.05)', padding: '100px 32px', background: 'radial-gradient(circle at 50% 0%, #0a0a0a 0%, #030303 100%)' }}>
+          <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
+            <div style={{ marginBottom: '64px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+                <Activity size={14} color="#0066FF" />
+                <span style={{ fontSize: '10px', color: '#0066FF', letterSpacing: '0.15em', fontWeight: 700 }}>THE PIPELINE</span>
+              </div>
+              <h2 style={{ fontSize: '36px', fontWeight: 800, lineHeight: 1.15, letterSpacing: '-0.02em' }}>
+                From SEC filing to actionable signal.
+              </h2>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '24px' }}>
+              {STEPS.map((h, i) => (
+                <div key={h.num} className="step-card" style={{
+                  background: '#080808', border: '1px solid #161616', borderRadius: '12px',
+                  padding: '32px 28px', position: 'relative', overflow: 'hidden',
+                  transition: 'border-color 300ms ease',
+                }}>
+                  <div className="step-num" style={{
+                    position: 'absolute', top: '16px', right: '20px',
+                    fontSize: '64px', fontWeight: 900, color: '#111', lineHeight: 1,
+                    fontFamily: "'JetBrains Mono', monospace",
+                    transition: 'all 300ms ease', pointerEvents: 'none'
+                  }}>
+                    {h.num}
+                  </div>
+                  <div style={{
+                    width: '40px', height: '4px', background: '#0066FF', borderRadius: '2px',
+                    marginBottom: '24px', boxShadow: '0 0 12px rgba(0,102,255,0.4)',
+                    position: 'relative', zIndex: 1
+                  }} />
+                  <h3 style={{
+                    fontSize: '13px', fontWeight: 800, letterSpacing: '0.08em',
+                    marginBottom: '16px', color: '#ddd', textTransform: 'uppercase',
+                    position: 'relative', zIndex: 1
+                  }}>
+                    {h.title}
+                  </h3>
+                  <p style={{ fontSize: '14px', color: '#777', lineHeight: 1.6, margin: 0, position: 'relative', zIndex: 1 }}>{h.desc}</p>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="flex items-center gap-1.5 text-[10px] text-zinc-600 font-mono">
-            <CheckCircle size={10} className="text-[#00C805]" />
-            <span>AFI not investment advice</span>
+        </section>
+
+        {/* ── CTA ── */}
+        <section style={{ borderTop: '1px solid rgba(255,255,255,0.05)', padding: '100px 32px' }}>
+          <div style={{
+            maxWidth: '800px', margin: '0 auto', textAlign: 'center',
+            background: 'linear-gradient(180deg, #0c0c0c 0%, #050505 100%)',
+            border: '1px solid #1a1a1a',
+            borderRadius: '16px',
+            padding: '64px 40px',
+            boxShadow: '0 20px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.05)',
+            position: 'relative', overflow: 'hidden'
+          }}>
+            <div style={{ position: 'absolute', top: 0, left: '20%', right: '20%', height: '1px', background: 'linear-gradient(90deg, transparent, #0066FF, transparent)', opacity: 0.5, boxShadow: '0 0 20px #0066FF' }} />
+
+            <h2 style={{ fontSize: '32px', fontWeight: 800, marginBottom: '16px', letterSpacing: '-0.02em', color: '#fff' }}>
+              Stop reacting to headlines.
+            </h2>
+            <p style={{ fontSize: '18px', color: '#888', marginBottom: '40px', maxWidth: '500px', margin: '0 auto 40px', lineHeight: 1.5 }}>
+              Start reading the filings. Free to start. Full dashboard access. Real-time signals from day one.
+            </p>
+            <button
+              onClick={() => navigate('/auth?mode=signup')}
+              style={{ ...btn(true), fontSize: '16px', padding: '16px 40px', borderRadius: '8px' }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#0052CC'; e.currentTarget.style.boxShadow = '0 0 40px rgba(0, 102, 255, 0.5)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = '#0066FF'; e.currentTarget.style.boxShadow = '0 0 16px rgba(0, 102, 255, 0.25)'; }}
+            >
+              Start Monitoring
+            </button>
           </div>
-        </div>
-      </footer>
+        </section>
+
+        {/* ── FOOTER ── */}
+        <footer style={{ borderTop: '1px solid rgba(255,255,255,0.05)', padding: '32px 32px', background: '#020202' }}>
+          <div style={{
+            maxWidth: '1000px', margin: '0 auto',
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            flexWrap: 'wrap', gap: '16px',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontWeight: 900, fontSize: '14px', letterSpacing: '0.05em' }}>AFI</span>
+              <span style={{ fontSize: '11px', color: '#444' }}>Autonomous Market Intelligence</span>
+            </div>
+            <div style={{ display: 'flex', gap: '24px', fontSize: '12px', color: '#555' }}>
+              <span>© 2026 AFI</span>
+              <span style={{ cursor: 'pointer', transition: 'color 150ms' }} onMouseEnter={e => e.target.style.color = '#fff'} onMouseLeave={e => e.target.style.color = '#555'}>Terms</span>
+              <span style={{ cursor: 'pointer', transition: 'color 150ms' }} onMouseEnter={e => e.target.style.color = '#fff'} onMouseLeave={e => e.target.style.color = '#555'}>Privacy</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#555' }}>
+              <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#00C805', opacity: 0.8 }} />
+              <span>Not investment advice</span>
+            </div>
+          </div>
+        </footer>
+      </div>
     </div>
   );
 }
