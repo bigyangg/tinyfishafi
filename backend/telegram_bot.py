@@ -162,12 +162,15 @@ def send_signal_alert(signal_data, is_watched=False):
         # Never crash the agent on Telegram failure
 
 
+import html
+
 def _escape_html(text):
-    """Escape special HTML characters to prevent parse errors."""
+    """Escape special HTML characters to prevent parse errors. Unescapes first to avoid double-escaping (&amp;amp;)."""
     if not text:
         return ""
+    text = html.unescape(str(text))
     return (
-        str(text)
+        text
         .replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
