@@ -1,6 +1,6 @@
-# AFI - Autonomous Filing Intelligence
+# AFI - Market Event Intelligence
 
-AFI is a regulatory intelligence dashboard built for retail investors and active traders. It monitors SEC EDGAR filings autonomously, classifies them with Google Gemini AI, scores each regulatory signal, and delivers structured intelligence through a real-time web dashboard and Telegram alerts.
+AFI is a real-time market event intelligence platform for active traders and finance researchers. It monitors SEC EDGAR filings continuously, detects new 8-K events within 2 minutes of publication, classifies market impact, enriches with price and sentiment data, and delivers structured signals through a live dashboard and Telegram alerts.
 
 ---
 
@@ -51,6 +51,7 @@ TELEGRAM_BOT_TOKEN=your-telegram-bot-token
 TELEGRAM_CHAT_ID=your-telegram-chat-id
 USE_TINYFISH=true
 TELEGRAM_ENABLED=true
+TELEGRAM_IMPACT_THRESHOLD=40
 CORS_ORIGINS=*
 ```
 
@@ -102,11 +103,19 @@ The dashboard will be available at `http://localhost:3000`.
 ```
 tinyfishafi/
   backend/
-    server.py            # FastAPI app: auth, signals, watchlist, agent control, health, brief
-    edgar_agent.py       # EDGAR 8-K polling agent with Gemini AI classification
-    telegram_bot.py      # Telegram alert dispatcher
-    requirements.txt     # Python dependencies
-    .env                 # Backend environment configuration
+    server.py              # FastAPI app: auth, signals, watchlist, agent control, config, health
+    edgar_agent.py         # EDGAR 8-K polling agent — delegates to signal pipeline
+    signal_pipeline.py     # Core orchestrator: classify -> enrich -> score -> store
+    event_classifier.py    # Deterministic taxonomy mapper (8-K item extraction)
+    market_data.py         # Yahoo Finance wrapper with 5-min TTL cache
+    sentiment_analyzer.py  # Filing vs news tone comparison
+    impact_engine.py       # Rule-based composite scoring (0-100)
+    price_tracker.py       # Scheduled T+1h/24h/3d price correlation checks
+    telegram_bot.py        # Telegram alert dispatcher (HTML formatted)
+    schema_migration.sql   # Phase 3 database migration script
+    requirements.txt       # Python dependencies (includes yfinance)
+    .env                   # Backend environment configuration
+    tests/                 # Unit tests for all pipeline modules
   frontend/
     src/
       App.js                          # Client-side routing
@@ -115,17 +124,15 @@ tinyfishafi/
       pages/
         Landing.jsx                   # Marketing landing page
         Auth.jsx                      # Login and signup forms
-        Dashboard.jsx                 # Real-time alert feed with live status
+        Dashboard.jsx                 # Real-time alert feed with live status + brief age
         Pricing.jsx                   # Subscription tiers
       components/
-        AlertCard.jsx                 # Signal card with confidence bar
-        SignalDetailModal.jsx         # Full signal detail overlay
-        WatchlistPanel.jsx            # Ticker watchlist management
+        AlertCard.jsx                 # Signal card: confidence bar, impact bar, event badge, ★ quick-add
+        SignalDetailModal.jsx         # Full signal detail with event type + impact score
+        WatchlistPanel.jsx            # Ticker search via backend proxy (/api/ticker/search)
         DashboardSidebar.jsx          # Navigation with Telegram test
     tailwind.config.js                # Design system configuration
     .env                              # Frontend environment configuration
-  memory/
-    PRD.md                            # Product Requirements Document
   CLAUDE.md                           # Architecture and constraints reference
   README.md                           # This file
 ```
@@ -134,22 +141,64 @@ tinyfishafi/
 
 ## System Architecture
 
+### Signal Pipeline
+
+The pipeline (`signal_pipeline.py`) processes filings through a chain of enrichment steps:
+
+1. **Classify** — Gemini 2.5 Flash analyzes filing text (Positive / Neutral / Risk)
+2. **Taxonomy** — Deterministic event mapping (EARNINGS_BEAT, EXEC_DEPARTURE, etc.)
+3. **Enrich** — Yahoo Finance fetches current price and news (cached 5 min)
+4. **Sentiment** — Compares filing signal against news headlines
+5. **Score** — Composite impact score (0-100): confidence + event weight + sentiment + watchlist
+6. **Store** — Enriched signal saved to Supabase
+7. **Track** — Price checks scheduled at T+1h, T+24h, T+3d
+8. **Alert** — Telegram notification if impact threshold met
+
+New filing types plug in via registry: `pipeline.register_processor("4", Form4Processor())`
+
 ### EDGAR Polling Agent
 
 The agent (`edgar_agent.py`) runs autonomously on a 120-second interval:
 
-1. Queries SEC EDGAR EFTS for new 8-K filings filed today
-2. Deduplicates against the Supabase `accession_number` field
-3. Extracts document text via TinyFish Web Agent (HTTP fallback)
-4. Classifies the filing with Gemini 2.5 Flash (Positive, Neutral, or Risk)
-5. Stores the signal in Supabase
-6. Dispatches a Telegram alert for confirmed classifications
+1. Loads config and processes promotion queue at cycle start
+2. Queries SEC EDGAR EFTS for new 8-K filings filed today
+3. **Resolves tickers from CIK** via `data.sec.gov/submissions/CIK{padded}.json`
+4. Deduplicates against the Supabase `accession_number` field
+5. Extracts document text via **3-step fallback chain**: TinyFish -> SEC EFTS full-text -> HTTP scrape (with `follow_redirects`)
+6. Delegates to `SignalPipeline.process()` for full classification + enrichment
+7. Dispatches a Telegram alert **only if impact >= TELEGRAM_IMPACT_THRESHOLD** (default 40)
 
 If the Gemini API key is missing or invalid, filings are stored as "Pending" with confidence 0. The agent never crashes on individual filing failures.
 
+### Notification Architecture
+
+AFI has three independent, optional notification channels:
+
+```
+New signal stored in Supabase
+        |
+  +-----+------+
+  |     |      |
+  v     v      v
+Email  Telegram  Dashboard
+(Resend) (Bot)  (Realtime WS)
+```
+
+Each channel works independently — disabling one does not affect the others. The Dashboard receives signals via Supabase Realtime WebSocket subscriptions. Telegram alerts are sent via the Bot API with HTML formatting. Email notifications (via Resend) are planned for Phase 4.
+
 ### Real-Time Dashboard
 
-The frontend subscribes to Supabase `postgres_changes` on the `signals` table. New signals appear instantly via WebSocket without page refresh. A 60-second polling fallback ensures data consistency.
+The frontend subscribes to Supabase `postgres_changes` on the `signals` table. New signals slide in from the top with a 200ms animation. Features include:
+
+- Pulsing green dot when agent is UP, red status bar when DOWN
+- Live countdown to next poll (ticks every second)
+- Filings processed counter (updates via realtime)
+- ALL/WATCHLIST feed tabs with WATCHED badge on matching cards
+- **★ Quick-add button** on each card to add ticker to watchlist
+- **Impact bar** (orange/amber/gray) and **event type badge** on each card
+- Yahoo Finance autocomplete for watchlist via backend proxy
+- 30-second relative timestamp auto-updates
+- **Market Brief age counter** ("42s ago" / "3m ago")
 
 ### AI Market Brief
 
@@ -173,11 +222,17 @@ The `/api/brief` endpoint sends the last 10 signals to Gemini and returns a 3-se
 ### Signals
 - `GET /api/signals` - All signals, ordered by filing date descending
 - `GET /api/signals?tickers=AAPL,NVDA` - Filter by ticker symbols
+- `POST /api/signals/{id}/correct` - Submit user correction (`{"correction": "Risk"}`)
+- `GET /api/signals/{id}/correlation` - Price correlation data (T+1h, T+24h, T+3d)
 
 ### Watchlist (Authenticated)
 - `GET /api/watchlist` - User's watchlist
 - `POST /api/watchlist` - Add ticker (`{"ticker": "AAPL"}`)
 - `DELETE /api/watchlist/{ticker}` - Remove ticker
+
+### Configuration
+- `GET /api/config` - Agent configuration (tier1 tickers, settings, version)
+- `POST /api/config` - Update config (auto-increments version)
 
 ### Intelligence
 - `GET /api/brief` - AI-generated 3-sentence market brief from latest signals
@@ -203,6 +258,14 @@ The `/api/brief` endpoint sends the last 10 signals to Gemini and returns a 3-se
 | accession_number | TEXT | Unique SEC identifier |
 | filed_at | TIMESTAMPTZ | SEC filing timestamp |
 | created_at | TIMESTAMPTZ | Database ingestion timestamp |
+| event_type | TEXT | Taxonomy event (EARNINGS_BEAT, EXEC_DEPARTURE, etc.) |
+| filing_subtype | TEXT | 8-K item number (e.g. "8-K Item 5.02") |
+| impact_score | INTEGER | Composite importance score (0-100) |
+| sentiment_delta | REAL | Filing vs news alignment (-1.0 to 1.0) |
+| sentiment_match | BOOLEAN | Whether filing and news sentiment agree |
+| user_correction | TEXT | User-submitted signal override |
+| correction_count | INTEGER | Number of corrections received |
+| config_version_at_classification | INTEGER | Agent config version when classified |
 
 ### watchlist
 
@@ -214,6 +277,28 @@ The `/api/brief` endpoint sends the last 10 signals to Gemini and returns a 3-se
 | created_at | TIMESTAMPTZ | Timestamp |
 
 Constraint: UNIQUE(user_id, ticker). Maximum 10 tickers per user.
+
+### price_correlations
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | UUID | Primary key |
+| signal_id | UUID | Foreign key to signals |
+| ticker | TEXT | Stock symbol |
+| price_at_filing | REAL | Price when filing was processed |
+| check_1h_at / check_24h_at / check_3d_at | TIMESTAMPTZ | Scheduled check times |
+| price_1h / price_24h / price_3d | REAL | Prices at each checkpoint |
+| pct_change_1h / pct_change_24h / pct_change_3d | REAL | Percentage changes |
+
+### agent_config
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | UUID | Primary key |
+| config_version | INTEGER | Auto-incrementing version number |
+| tier1_tickers | JSONB | Priority ticker list |
+| pending_promotions | JSONB | Tickers awaiting promotion |
+| settings | JSONB | Configurable pipeline settings |
 
 ---
 
@@ -244,13 +329,22 @@ Constraint: UNIQUE(user_id, ticker). Maximum 10 tickers per user.
 - Real-time dashboard with WebSocket subscriptions
 - Health monitoring and AI market brief
 
-### Phase 3: Advanced Capabilities (Planned)
-- REST API gateway for Pro-tier subscribers
-- User feedback loop on AI accuracy
-- Signal-to-price correlation analytics
-- Stripe billing integration
+### Phase 3: Signal Pipeline (In Progress)
+- Extensible signal pipeline with registry pattern
+- Event taxonomy mapping (deterministic classification)
+- Yahoo Finance market data enrichment with TTL cache
+- Sentiment analysis (filing vs news tone comparison)
+- Composite impact scoring (0-100)
+- Price correlation tracking (T+1h, T+24h, T+3d)
+- Agent config versioning and promotion queue
+- Signal correction feedback loop
+- Yahoo Finance autocomplete for watchlist
+- Live dashboard polish (countdown, animations, WATCHED badges)
+- Telegram HTML formatting fix
 
 ### Phase 4: Enterprise (Planned)
-- 10-K, 10-Q, S-1 filing support
+- Form 4, 10-K, 10-Q, S-1 filing support via plugin processors
+- REST API gateway for Pro-tier subscribers
+- Email notifications via Resend
+- Stripe billing integration
 - White-label API for institutional clients
-- International regulatory filing support

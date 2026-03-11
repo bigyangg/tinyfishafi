@@ -1,57 +1,532 @@
-// pages/Dashboard.jsx — Main dashboard with realtime updates
-// Purpose: Alert feed with Supabase realtime, agent status bar, health check,
-//          AI brief panel, signal detail modal, animations
-// Dependencies: @supabase/supabase-js, axios, lucide-react
-
+// Dashboard.jsx — Bloomberg Terminal x Linear professional dashboard
 import { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
 import DashboardSidebar from '../components/DashboardSidebar';
 import AlertCard from '../components/AlertCard';
-import WatchlistPanel from '../components/WatchlistPanel';
 import SignalDetailModal from '../components/SignalDetailModal';
-import { RefreshCw, Circle, Activity, Zap, Wifi, WifiOff, Clock, AlertTriangle } from 'lucide-react';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
-function relativeTime(isoString) {
-  if (!isoString) return '';
-  const date = new Date(isoString);
-  const now = new Date();
-  const diffMs = now - date;
-  const diffSec = Math.floor(diffMs / 1000);
-  if (diffSec < 60) return 'just now';
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffH = Math.floor(diffMin / 60);
-  if (diffH < 24) return `${diffH}h ago`;
-  const diffD = Math.floor(diffH / 24);
-  if (diffD === 1) return 'yesterday';
-  if (diffD < 7) return `${diffD}d ago`;
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+function debounce(func, wait) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => { clearTimeout(timeout); func(...args); };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
 }
 
-function formatCountdown(seconds) {
-  if (seconds === null || seconds === undefined) return '--:--';
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}:${String(s).padStart(2, '0')}`;
-}
+// === FIX 5: STATUS BAR ===
+const StatusBar = ({ agentStatus, isOnline, filedToday }) => (
+  <div style={{
+    height: "40px",
+    borderBottom: "1px solid #0d0d0d",
+    display: "flex",
+    alignItems: "center",
+    padding: "0 16px",
+    gap: "16px",
+    background: "#030303",
+  }}>
+    {/* Agent status */}
+    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+      <div style={{
+        width: "5px", height: "5px",
+        borderRadius: "50%",
+        background: agentStatus === "running" ? "#00C805" : "#FF3333",
+        animation: agentStatus === "running" ? "pulse-green 3s ease-in-out infinite" : "none",
+      }} />
+      <span style={{
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontSize: "10px",
+        color: agentStatus === "running" ? "#555" : "#FF3333",
+        letterSpacing: "0.08em",
+      }}>
+        {agentStatus === "running" ? "MONITORING SEC EDGAR" : "AGENT OFFLINE"}
+      </span>
+    </div>
+
+    {/* Filings today */}
+    {filedToday > 0 && (
+      <span style={{
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontSize: "10px",
+        color: "#333",
+      }}>
+        {filedToday} filing{filedToday !== 1 ? "s" : ""} today
+      </span>
+    )}
+
+    <div style={{ flex: 1 }} />
+
+    {/* Connection */}
+    <div style={{
+      fontFamily: "'IBM Plex Mono', monospace",
+      fontSize: "10px",
+      color: isOnline ? "#2a2a2a" : "#FF333380",
+      letterSpacing: "0.06em",
+    }}>
+      {isOnline ? "●" : "○ DISCONNECTED"}
+    </div>
+  </div>
+);
+
+// === FIX 4: FEED HEADER ===
+const FeedHeader = ({ filter, setFilter, count }) => (
+  <div style={{
+    display: "flex",
+    alignItems: "center",
+    padding: "0 20px",
+    height: "48px",
+    borderBottom: "1px solid #0d0d0d",
+    gap: "0",
+    flexShrink: 0,
+  }}>
+    <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginRight: "24px" }}>
+      <span style={{ fontSize: "14px", fontWeight: 600, color: "#fff" }}>
+        Filings
+      </span>
+      <span style={{
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontSize: "12px",
+        color: "#333",
+      }}>
+        {count}
+      </span>
+    </div>
+
+    {["ALL", "WATCHLIST", "RISK", "OPPORTUNITY"].map(f => (
+      <button
+        key={f}
+        onClick={() => setFilter(f)}
+        style={{
+          padding: "4px 12px",
+          background: "none",
+          border: "none",
+          borderBottom: filter === f ? "1px solid #fff" : "1px solid transparent",
+          color: filter === f ? "#fff" : "#333",
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: "11px",
+          letterSpacing: "0.06em",
+          cursor: "pointer",
+          transition: "color 100ms",
+          marginBottom: "-1px",
+        }}
+        onMouseEnter={e => filter !== f && (e.currentTarget.style.color = "#666")}
+        onMouseLeave={e => filter !== f && (e.currentTarget.style.color = "#333")}
+      >
+        {f}
+      </button>
+    ))}
+
+    <div style={{ flex: 1 }} />
+
+    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+      <div style={{
+        width: "5px", height: "5px",
+        borderRadius: "50%",
+        background: "#00C805",
+        animation: "pulse-green 2s ease-in-out infinite",
+      }} />
+      <span style={{
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontSize: "10px",
+        color: "#333",
+      }}>
+        LIVE
+      </span>
+    </div>
+  </div>
+);
+
+// === FIX 3: RIGHT PANEL ZONES ===
+
+const TodayStats = ({ signals }) => {
+  const risks = signals.filter(s => s.classification === "Risk").length;
+  const opps = signals.filter(s => s.classification === "Positive").length;
+  const total = signals.length;
+
+  return (
+    <div style={{ padding: "16px", borderBottom: "1px solid #0f0f0f" }}>
+      <div style={{
+        fontSize: "10px",
+        fontFamily: "'IBM Plex Mono', monospace",
+        color: "#333",
+        letterSpacing: "0.1em",
+        marginBottom: "12px",
+      }}>
+        TODAY
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px" }}>
+        {[
+          { value: total, label: "Filings", color: "#555" },
+          { value: opps, label: "Opportunities", color: opps > 0 ? "#00C805" : "#333" },
+          { value: risks, label: "Risks", color: risks > 0 ? "#FF3333" : "#333" },
+        ].map(({ value, label, color }) => (
+          <div key={label} style={{
+            background: "#080808",
+            border: "1px solid #111",
+            padding: "10px 8px",
+            textAlign: "center",
+          }}>
+            <div style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontWeight: 700,
+              fontSize: "20px",
+              color,
+              lineHeight: 1,
+              marginBottom: "4px",
+            }}>
+              {value}
+            </div>
+            <div style={{
+              fontSize: "9px",
+              color: "#333",
+              fontFamily: "'IBM Plex Mono', monospace",
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+            }}>
+              {label}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const SignalSummary = ({ brief, isGenerating, briefAge }) => {
+  const bullets = brief
+    ? brief
+      .split(/(?<=[.!?])\s+/)
+      .filter(s => s.length > 20)
+      .slice(0, 3)
+      .map(s => s.trim().replace(/\.$/, ""))
+    : [];
+
+  return (
+    <div style={{ padding: "16px", borderBottom: "1px solid #0f0f0f" }}>
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        marginBottom: "12px",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <div style={{
+            width: "5px", height: "5px",
+            borderRadius: "50%",
+            background: isGenerating ? "#FFB300" : "#0066FF",
+            animation: isGenerating ? "pulse 1s ease infinite" : "none",
+          }} />
+          <span style={{
+            fontSize: "10px",
+            fontFamily: "'IBM Plex Mono', monospace",
+            color: "#444",
+            letterSpacing: "0.1em",
+            textTransform: "uppercase",
+          }}>
+            Signal Summary
+          </span>
+        </div>
+        {briefAge > 0 && (
+          <span style={{
+            fontSize: "10px",
+            fontFamily: "'IBM Plex Mono', monospace",
+            color: "#222",
+          }}>
+            {briefAge < 60 ? `${briefAge}s ago` : `${Math.floor(briefAge / 60)}m ago`}
+          </span>
+        )}
+      </div>
+
+      {isGenerating ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          {[90, 75, 55].map((w, i) => (
+            <div key={i} style={{
+              height: "8px",
+              width: `${w}%`,
+              background: "#111",
+              animation: `shimmer 1.5s ease ${i * 0.2}s infinite`,
+            }} />
+          ))}
+        </div>
+      ) : bullets.length > 0 ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0" }}>
+          {bullets.map((bullet, i) => (
+            <div key={i} style={{
+              display: "flex",
+              gap: "10px",
+              padding: "8px 0",
+              borderBottom: i < bullets.length - 1 ? "1px solid #0d0d0d" : "none",
+              alignItems: "flex-start",
+            }}>
+              <div style={{
+                width: "4px",
+                height: "4px",
+                borderRadius: "50%",
+                background: i === 0 ? "#0066FF" : "#222",
+                marginTop: "6px",
+                flexShrink: 0,
+              }} />
+              <span style={{
+                fontSize: "12px",
+                color: i === 0 ? "#888" : "#444",
+                lineHeight: 1.55,
+                fontWeight: i === 0 ? 500 : 400,
+              }}>
+                {bullet}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p style={{
+          fontSize: "12px",
+          color: "#222",
+          margin: 0,
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontStyle: "italic",
+        }}>
+          Awaiting new filings...
+        </p>
+      )}
+    </div>
+  );
+};
+
+const WatchlistZone = ({ watchlist, signals, onAdd, onRemove }) => {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+
+  const watchedWithSignals = watchlist.map(ticker => {
+    const latest = signals.find(s => s.ticker === ticker);
+    return { ticker, signal: latest?.classification || null, summary: latest?.summary || null };
+  });
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const search = useCallback(
+    debounce(async (q) => {
+      if (!q.trim()) { setResults([]); return; }
+      setSearching(true);
+      try {
+        const resp = await fetch(`${API}/ticker/search?q=${encodeURIComponent(q)}`);
+        const data = await resp.json();
+        setResults(data.results || [{ ticker: q.toUpperCase(), name: q.toUpperCase() }]);
+      } catch {
+        setResults([{ ticker: q.toUpperCase(), name: q.toUpperCase() }]);
+      } finally {
+        setSearching(false);
+      }
+    }, 300),
+    []
+  );
+
+  return (
+    <div style={{ padding: "16px", flex: 1 }}>
+      <div style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        marginBottom: "10px",
+      }}>
+        <span style={{
+          fontSize: "10px",
+          fontFamily: "'IBM Plex Mono', monospace",
+          color: "#333",
+          letterSpacing: "0.1em",
+        }}>
+          WATCHLIST
+        </span>
+        <span style={{
+          fontSize: "10px",
+          fontFamily: "'IBM Plex Mono', monospace",
+          color: "#222",
+        }}>
+          {watchlist.length}/10
+        </span>
+      </div>
+
+      <div style={{ position: "relative", marginBottom: "8px" }}>
+        <input
+          value={query}
+          onChange={e => { setQuery(e.target.value); search(e.target.value); }}
+          onKeyDown={e => {
+            if (e.key === "Enter" && query.trim()) {
+              onAdd(query.trim().toUpperCase());
+              setQuery("");
+              setResults([]);
+            }
+          }}
+          placeholder="+ Add ticker"
+          style={{
+            width: "100%",
+            background: "#080808",
+            border: "1px solid #1a1a1a",
+            color: "#fff",
+            padding: "7px 10px",
+            fontSize: "12px",
+            fontFamily: "'IBM Plex Mono', monospace",
+            outline: "none",
+            boxSizing: "border-box",
+          }}
+          onFocus={e => e.target.style.borderColor = "#2a2a2a"}
+          onBlur={e => { e.target.style.borderColor = "#1a1a1a"; }}
+        />
+        {searching && (
+          <span style={{
+            position: "absolute", right: "8px", top: "50%",
+            transform: "translateY(-50%)",
+            fontSize: "10px", color: "#333", fontFamily: "monospace",
+          }}>···</span>
+        )}
+      </div>
+
+      {results.length > 0 && (
+        <div style={{ border: "1px solid #111", marginBottom: "8px", background: "#080808" }}>
+          {results.slice(0, 5).map((r, i) => {
+            const alreadyAdded = watchlist.includes(r.ticker);
+            return (
+              <button
+                key={`${r.ticker}-${i}`}
+                onClick={() => { if (!alreadyAdded) { onAdd(r.ticker); setQuery(""); setResults([]); } }}
+                disabled={alreadyAdded}
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "8px 10px",
+                  background: "transparent",
+                  border: "none",
+                  borderBottom: "1px solid #0d0d0d",
+                  cursor: alreadyAdded ? "default" : "pointer",
+                  color: alreadyAdded ? "#2a2a2a" : "#888",
+                  transition: "background 80ms",
+                }}
+                onMouseEnter={e => !alreadyAdded && (e.currentTarget.style.background = "#0f0f0f")}
+                onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+              >
+                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  <span style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontWeight: 700,
+                    fontSize: "12px",
+                    color: alreadyAdded ? "#2a2a2a" : "#ddd",
+                  }}>
+                    {r.ticker}
+                  </span>
+                  <span style={{ fontSize: "11px", color: "#333" }}>
+                    {(r.name || "").slice(0, 20)}{r.name?.length > 20 ? "…" : ""}
+                  </span>
+                </div>
+                <span style={{ fontSize: "12px", color: alreadyAdded ? "#1a1a1a" : "#333" }}>
+                  {alreadyAdded ? "✓" : "+"}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {watchedWithSignals.length === 0 ? (
+        <div style={{ padding: "20px 0", textAlign: "center" }}>
+          <p style={{
+            fontSize: "11px",
+            color: "#1e1e1e",
+            fontFamily: "'IBM Plex Mono', monospace",
+            margin: 0,
+            letterSpacing: "0.06em",
+          }}>
+            NO TICKERS WATCHED
+          </p>
+          <p style={{ fontSize: "11px", color: "#1a1a1a", margin: "6px 0 0" }}>
+            Type a ticker above to start
+          </p>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          {watchedWithSignals.map(({ ticker, signal }) => {
+            const sigColor = signal === "Positive" ? "#00C805"
+              : signal === "Risk" ? "#FF3333"
+                : "#1e1e1e";
+
+            return (
+              <div key={ticker} style={{
+                display: "flex",
+                alignItems: "center",
+                padding: "8px 0",
+                borderBottom: "1px solid #0d0d0d",
+                gap: "8px",
+              }}>
+                <div style={{
+                  width: "5px", height: "5px",
+                  borderRadius: "50%",
+                  background: sigColor,
+                  flexShrink: 0,
+                }} />
+
+                <span style={{
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontWeight: 600,
+                  fontSize: "12px",
+                  color: "#ccc",
+                  flex: 1,
+                }}>
+                  {ticker}
+                </span>
+
+                {signal && signal !== "Neutral" && signal !== "Pending" && (
+                  <span style={{
+                    fontSize: "9px",
+                    color: sigColor,
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    letterSpacing: "0.06em",
+                  }}>
+                    {signal === "Positive" ? "OPP" : "RISK"}
+                  </span>
+                )}
+
+                <button
+                  onClick={() => onRemove(ticker)}
+                  style={{
+                    background: "none", border: "none",
+                    color: "#1e1e1e", cursor: "pointer",
+                    fontSize: "14px", lineHeight: 1, padding: "0 2px",
+                    transition: "color 150ms",
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.color = "#FF3333"}
+                  onMouseLeave={e => e.currentTarget.style.color = "#1e1e1e"}
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
+
+// === MAIN COMPONENT ===
 
 export default function Dashboard() {
   const { user, authHeaders, logout } = useAuth();
   const [allSignals, setAllSignals] = useState([]);
   const [watchlist, setWatchlist] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState('All');
-  const [lastUpdated, setLastUpdated] = useState(null);
+  const [feedFilter, setFeedFilter] = useState('ALL');
   const [selectedSignal, setSelectedSignal] = useState(null);
   const [newSignalIds, setNewSignalIds] = useState(new Set());
-  const [, setTimeTick] = useState(0); // force re-render for relative timestamps
 
-  // Health check state
+  // Health check — debounced
   const [backendOnline, setBackendOnline] = useState(null);
+  const [consecutiveFailures, setConsecutiveFailures] = useState(0);
+  const offlineTimerRef = useRef(null);
 
   // Agent status
   const [agentStatus, setAgentStatus] = useState({
@@ -61,13 +536,14 @@ export default function Dashboard() {
     next_poll_seconds: null,
     poll_interval: 120,
   });
-  const [countdown, setCountdown] = useState(null);
 
   // AI Brief
   const [brief, setBrief] = useState('');
   const [briefLoading, setBriefLoading] = useState(false);
+  const [briefTimestamp, setBriefTimestamp] = useState(null);
+  const [briefAge, setBriefAge] = useState(0);
 
-  // Format a Supabase signal row to match API format
+  // Format row
   const formatSignalRow = useCallback((row) => ({
     id: row.id || '',
     ticker: row.ticker || '',
@@ -79,18 +555,38 @@ export default function Dashboard() {
     filed_at: row.filed_at || '',
     accession_number: row.accession_number || '',
     edgar_url: row.edgar_url || '',
+    event_type: row.event_type || null,
+    impact_score: row.impact_score || null,
   }), []);
 
-  // Health check
+  // Check health
   const checkHealth = useCallback(async () => {
     try {
-      const res = await axios.get(`${API}/health`, { timeout: 5000 });
-      setBackendOnline(res.data?.status === 'ok');
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4000);
+      const res = await fetch(`${API}/health`, { signal: controller.signal });
+      clearTimeout(timeout);
+
+      if (res.ok) {
+        if (offlineTimerRef.current) {
+          clearTimeout(offlineTimerRef.current);
+          offlineTimerRef.current = null;
+        }
+        setBackendOnline(true);
+        setConsecutiveFailures(0);
+      }
     } catch {
-      setBackendOnline(false);
+      setConsecutiveFailures(prev => prev + 1);
+      if (!offlineTimerRef.current) {
+        offlineTimerRef.current = setTimeout(() => {
+          setBackendOnline(false);
+          offlineTimerRef.current = null;
+        }, 15000);
+      }
     }
   }, []);
 
+  // Fetch logic
   const fetchData = useCallback(async () => {
     try {
       const [sigRes, wlRes] = await Promise.all([
@@ -99,23 +595,19 @@ export default function Dashboard() {
       ]);
       setAllSignals(sigRes.data.signals || []);
       setWatchlist(wlRes.data.tickers || []);
-      setLastUpdated(new Date());
     } catch (err) {
       console.error('Failed to load data:', err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [authHeaders]);
 
   const fetchAgentStatus = useCallback(async () => {
     try {
       const res = await axios.get(`${API}/edgar/status`);
       setAgentStatus(res.data);
-      if (res.data.next_poll_seconds !== null && res.data.next_poll_seconds !== undefined) {
-        setCountdown(res.data.next_poll_seconds);
-      }
     } catch {
-      // Silently fail
+      // silent
     }
   }, []);
 
@@ -124,6 +616,8 @@ export default function Dashboard() {
     try {
       const res = await axios.get(`${API}/brief`);
       setBrief(res.data.brief || '');
+      setBriefTimestamp(new Date());
+      setBriefAge(0);
     } catch {
       setBrief('Unable to load market brief.');
     } finally {
@@ -131,89 +625,60 @@ export default function Dashboard() {
     }
   }, []);
 
-  // Initial data load
+  // Initial load
   useEffect(() => {
+    if (!user) return;
     fetchData();
-    fetchAgentStatus();
-    checkHealth();
     fetchBrief();
-  }, [fetchData, fetchAgentStatus, checkHealth, fetchBrief]);
+    checkHealth();
+    fetchAgentStatus();
+  }, [user, fetchData, fetchBrief, checkHealth, fetchAgentStatus]);
 
-  // 60-second polling for signals + 30s for health
+  // Polling intervals
   useEffect(() => {
-    const dataInterval = setInterval(() => {
-      fetchData();
-      fetchAgentStatus();
-    }, 60000);
-    const healthInterval = setInterval(checkHealth, 30000);
+    const healthInterval = setInterval(checkHealth, 5000);
+    const agentInterval = setInterval(fetchAgentStatus, 15000);
+    const signalInterval = setInterval(fetchData, 30000);
+    const briefInterval = setInterval(fetchBrief, 120000);
+
     return () => {
-      clearInterval(dataInterval);
       clearInterval(healthInterval);
+      clearInterval(agentInterval);
+      clearInterval(signalInterval);
+      clearInterval(briefInterval);
+      if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
     };
-  }, [fetchData, fetchAgentStatus, checkHealth]);
+  }, [checkHealth, fetchAgentStatus, fetchData, fetchBrief]);
 
-  // Countdown timer - decrements every second
+  // Realtime Subscriptions
   useEffect(() => {
-    const timer = setInterval(() => {
-      setCountdown(prev => {
-        if (prev === null || prev <= 0) return prev;
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  // Force re-render every 60s for relative timestamps
-  useEffect(() => {
-    const timer = setInterval(() => setTimeTick(t => t + 1), 60000);
-    return () => clearInterval(timer);
-  }, []);
-
-  // Supabase realtime subscription for signals
-  useEffect(() => {
+    if (!user) return;
     const channel = supabase
       .channel('signals-realtime')
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'signals' },
         (payload) => {
-          const newSignal = formatSignalRow(payload.new);
-          setAllSignals(prev => [newSignal, ...prev]);
-          setLastUpdated(new Date());
-          // Mark as new for animation
-          setNewSignalIds(prev => new Set([...prev, newSignal.id]));
+          const formatted = formatSignalRow(payload.new);
+          setAllSignals(prev => [formatted, ...prev]);
+          setNewSignalIds(prev => new Set([...prev, formatted.id]));
           setTimeout(() => {
             setNewSignalIds(prev => {
               const next = new Set(prev);
-              next.delete(newSignal.id);
+              next.delete(formatted.id);
               return next;
             });
           }, 3000);
-          // Refresh brief when new signal arrives
           fetchBrief();
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'signals' },
-        (payload) => {
-          const updated = formatSignalRow(payload.new);
-          setAllSignals(prev =>
-            prev.map(s => s.id === updated.id ? updated : s)
-          );
         }
       )
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [formatSignalRow, fetchBrief]);
+    return () => supabase.removeChannel(channel);
+  }, [user, formatSignalRow, fetchBrief]);
 
-  // Supabase realtime subscription for watchlist
   useEffect(() => {
     if (!user) return;
-
     const channel = supabase
       .channel('watchlist-realtime')
       .on(
@@ -227,18 +692,25 @@ export default function Dashboard() {
       )
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [user]);
+    return () => supabase.removeChannel(channel);
+  }, [user, authHeaders]);
 
+  // Brief age counter
+  useEffect(() => {
+    if (!briefTimestamp) return;
+    const timer = setInterval(() => {
+      setBriefAge(Math.floor((Date.now() - briefTimestamp.getTime()) / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [briefTimestamp]);
+
+  // Watchlist actions
   const addTicker = async (ticker) => {
     try {
       const res = await axios.post(`${API}/watchlist`, { ticker }, { headers: authHeaders() });
       setWatchlist(res.data.tickers);
-      return null;
     } catch (err) {
-      return err?.response?.data?.detail || 'Failed to add ticker';
+      return err.response?.data?.detail || 'Failed to add';
     }
   };
 
@@ -251,254 +723,109 @@ export default function Dashboard() {
     }
   };
 
-  // Filter signals: watchlist filter first, then classification filter
-  let displayedSignals = allSignals;
-  if (watchlist.length > 0) {
-    displayedSignals = displayedSignals.filter(s => watchlist.includes(s.ticker));
-  }
-  if (filter !== 'All') {
-    displayedSignals = displayedSignals.filter(s => s.classification === filter);
-  }
-
-  const FILTER_TABS = ['All', 'Positive', 'Neutral', 'Risk'];
-  const FILTER_COLORS = {
-    All: '',
-    Positive: 'text-[#00C805]',
-    Neutral: 'text-zinc-400',
-    Risk: 'text-[#FF3333]',
+  const toggleWatch = async (ticker) => {
+    if (watchlist.includes(ticker)) await removeTicker(ticker);
+    else await addTicker(ticker);
   };
 
-  const isAgentRunning = agentStatus.agent_status === 'running';
+  // Filter signals based on feedFilter: "ALL", "WATCHLIST", "RISK", "OPPORTUNITY"
+  let displayedSignals = allSignals;
+  if (feedFilter === 'WATCHLIST' && watchlist.length > 0) {
+    displayedSignals = displayedSignals.filter(s => watchlist.includes(s.ticker));
+  } else if (feedFilter === 'RISK') {
+    displayedSignals = displayedSignals.filter(s => s.classification === 'Risk');
+  } else if (feedFilter === 'OPPORTUNITY') {
+    displayedSignals = displayedSignals.filter(s => s.classification === 'Positive');
+  }
 
   return (
-    <div className="flex h-screen bg-[#050505] overflow-hidden" data-testid="dashboard">
-      <DashboardSidebar user={user} onLogout={logout} />
+    <div style={{
+      display: "grid",
+      gridTemplateColumns: "160px 1fr 280px",
+      gridTemplateRows: "40px 1fr",
+      height: "100vh",
+      overflow: "hidden",
+      background: "#030303",
+    }}>
 
-      <div className="flex-1 flex overflow-hidden">
-        {/* Main feed */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+      {/* TOP STATUS BAR */}
+      <div style={{ gridColumn: "1 / -1", gridRow: "1", zIndex: 10 }}>
+        <StatusBar
+          agentStatus={agentStatus.agent_status}
+          isOnline={backendOnline !== false || consecutiveFailures < 3}
+          filedToday={agentStatus.filings_processed_today}
+        />
+      </div>
 
-          {/* Offline banner */}
-          {backendOnline === false && (
-            <div className="bg-[#FF3333]/10 border-b border-[#FF3333]/20 px-6 py-2 flex items-center gap-2" data-testid="offline-banner">
-              <AlertTriangle size={12} className="text-[#FF3333]" />
-              <span className="text-[11px] font-mono text-[#FF3333]">
-                Cannot reach AFI backend. Check that the server is running on port 8001.
-              </span>
+      {/* LEFT NAV */}
+      <div style={{ gridRow: "2", borderRight: "1px solid #0d0d0d", overflow: "hidden" }}>
+        <DashboardSidebar user={user} onLogout={logout} />
+      </div>
+
+      {/* CENTER FEED */}
+      <div style={{ gridRow: "2", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <FeedHeader filter={feedFilter} setFilter={setFeedFilter} count={displayedSignals.length} />
+
+        <div style={{ flex: 1, overflowY: "auto", padding: "0" }} data-testid="signals-feed">
+          {loading ? (
+            <div style={{ padding: "40px 20px", textAlign: "center" }}>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: "11px", color: "#333", animation: "pulse 2s ease infinite" }}>
+                LOADING SIGNALS...
+              </div>
             </div>
-          )}
-
-          {/* Agent Status Bar */}
-          <div className="border-b border-zinc-800 px-6 py-2 flex items-center gap-4 bg-[#0A0A0A]" data-testid="agent-status-bar">
-            <Activity size={12} className="text-zinc-500" />
-            <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">EDGAR Agent</span>
-
-            {/* Status badge */}
-            <span className={`flex items-center gap-1.5 text-[10px] font-mono font-bold px-2 py-0.5 uppercase tracking-wider ${isAgentRunning
-              ? 'bg-[#00C805]/10 text-[#00C805] border border-[#00C805]/20'
-              : 'bg-zinc-800 text-zinc-500 border border-zinc-700'
-              }`}>
-              <span
-                className={`w-1.5 h-1.5 rounded-full ${isAgentRunning ? 'bg-[#00C805]' : 'bg-zinc-600'}`}
-                style={isAgentRunning ? { animation: 'pulse 2s ease-in-out infinite' } : {}}
-              ></span>
-              {isAgentRunning ? 'UP' : 'DOWN'}
-            </span>
-
-            {/* Last poll */}
-            <span className="text-[10px] font-mono text-zinc-600">
-              Last poll: <span className="text-zinc-400">{agentStatus.last_poll_time ? relativeTime(agentStatus.last_poll_time) : 'Never'}</span>
-            </span>
-
-            {/* Next poll countdown */}
-            {isAgentRunning && countdown !== null && (
-              <span className="text-[10px] font-mono text-zinc-600 flex items-center gap-1">
-                <Clock size={9} className="text-zinc-600" />
-                Next: <span className="text-zinc-400">{formatCountdown(countdown)}</span>
-              </span>
-            )}
-
-            {/* Filings today */}
-            <span className="text-[10px] font-mono text-zinc-600">
-              Today: <span className="text-zinc-400 font-bold">{agentStatus.filings_processed_today}</span> filings
-            </span>
-
-            {/* Online/Offline indicator */}
-            <div className="ml-auto flex items-center gap-1.5">
-              {backendOnline === true ? (
+          ) : displayedSignals.length === 0 ? (
+            <div style={{ padding: "40px 20px", textAlign: "center" }}>
+              {allSignals.length === 0 ? (
                 <>
-                  <Wifi size={10} className="text-[#00C805]" />
-                  <span className="text-[9px] font-mono text-[#00C805] uppercase tracking-widest">Online</span>
-                </>
-              ) : backendOnline === false ? (
-                <>
-                  <WifiOff size={10} className="text-[#FF3333]" />
-                  <span className="text-[9px] font-mono text-[#FF3333] uppercase tracking-widest">Offline</span>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: "11px", color: "#2a2a2a", marginBottom: "16px", letterSpacing: "0.08em" }}>
+                    NO SIGNALS YET
+                  </div>
+                  <p style={{ fontSize: "12px", color: "#222", marginBottom: "16px" }}>
+                    Agent is monitoring EDGAR. First signals will appear shortly.
+                  </p>
                 </>
               ) : (
-                <>
-                  <Zap size={10} className="text-zinc-700" />
-                  <span className="text-[9px] font-mono text-zinc-700 uppercase tracking-widest">Checking</span>
-                </>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: "11px", color: "#2a2a2a", letterSpacing: "0.08em" }}>
+                  NO SIGNALS MATCH FILTER
+                </div>
               )}
             </div>
-          </div>
-
-          {/* Feed header */}
-          <div className="border-b border-zinc-800 px-6 py-4 flex items-center justify-between shrink-0">
-            <div className="flex items-center gap-4">
-              <div>
-                <div className="flex items-center gap-2">
-                  <h1 className="font-sans font-semibold text-white text-base" data-testid="feed-title">Alert Feed</h1>
-                  <span className="font-mono text-xs text-zinc-500 border border-zinc-800 px-2 py-0.5" data-testid="feed-count">
-                    {displayedSignals.length}
-                  </span>
-                </div>
-                <div className="flex items-center gap-1.5 mt-0.5">
-                  <Circle size={6} className="fill-[#00C805] text-[#00C805]" />
-                  <span className="text-[10px] font-mono text-zinc-600 uppercase tracking-widest">Live · EDGAR monitored</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-4">
-              {/* Filter tabs */}
-              <div className="flex items-center gap-0.5 border border-zinc-800" data-testid="filter-tabs">
-                {FILTER_TABS.map(f => (
-                  <button
-                    key={f}
-                    onClick={() => setFilter(f)}
-                    className={`px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider transition-colors duration-75 ${filter === f
-                      ? 'bg-zinc-800 text-white'
-                      : `text-zinc-600 hover:text-zinc-300 ${FILTER_COLORS[f]}`
-                      }`}
-                    data-testid={`filter-tab-${f.toLowerCase()}`}
-                  >
-                    {f}
-                  </button>
-                ))}
-              </div>
-
-              {/* Last updated */}
-              <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-700">
-                <RefreshCw size={10} />
-                <span>{lastUpdated ? relativeTime(lastUpdated.toISOString()) : ''}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Watchlist filter indicator */}
-          {watchlist.length > 0 && (
-            <div className="border-b border-zinc-800 px-6 py-2 bg-[#0066FF]/5 flex items-center gap-2" data-testid="watchlist-filter-indicator">
-              <span className="text-[10px] font-mono text-[#0066FF] uppercase tracking-widest">Filtered to watchlist</span>
-              <span className="font-mono text-[10px] text-zinc-500">
-                ({watchlist.join(', ')})
-              </span>
-            </div>
+          ) : (
+            displayedSignals.map(signal => (
+              <AlertCard
+                key={signal.id}
+                signal={signal}
+                onClick={setSelectedSignal}
+                isNew={newSignalIds.has(signal.id)}
+                isWatched={watchlist.includes(signal.ticker)}
+                onToggleWatch={toggleWatch}
+              />
+            ))
           )}
-
-          {/* Signals list */}
-          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-2" data-testid="signals-list">
-            {loading ? (
-              <div className="flex items-center justify-center h-32" data-testid="loading-state">
-                <span className="font-mono text-xs text-zinc-600 uppercase tracking-widest">Loading signals...</span>
-              </div>
-            ) : displayedSignals.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-48 text-center" data-testid="empty-state">
-                {isAgentRunning ? (
-                  <>
-                    <div className="flex items-center gap-2 mb-3">
-                      <span
-                        className="w-2 h-2 rounded-full bg-[#00C805]"
-                        style={{ animation: 'pulse 2s ease-in-out infinite' }}
-                      ></span>
-                      <span className="text-zinc-400 font-mono text-xs uppercase tracking-widest">Agent is live</span>
-                    </div>
-                    <div className="text-zinc-600 text-xs font-mono">
-                      Waiting for next EDGAR filing. Polling every {Math.floor(agentStatus.poll_interval / 60)} minutes.
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="text-zinc-700 font-mono text-xs uppercase tracking-widest mb-2">No alerts found</div>
-                    {watchlist.length > 0 && (
-                      <div className="text-zinc-600 text-xs font-mono">
-                        No alerts yet for your watchlist.
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            ) : (
-              displayedSignals.map(signal => (
-                <AlertCard
-                  key={signal.id}
-                  signal={signal}
-                  onClick={setSelectedSignal}
-                  isNew={newSignalIds.has(signal.id)}
-                />
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* Right panel: Watchlist + AI Brief */}
-        <div className="w-[280px] shrink-0 border-l border-zinc-800 bg-[#050505] flex flex-col h-full">
-          <WatchlistPanel
-            watchlist={watchlist}
-            onAdd={addTicker}
-            onRemove={removeTicker}
-          />
-
-          {/* AI Brief Panel */}
-          <div className="border-t border-zinc-800 px-4 py-3 flex flex-col" data-testid="ai-brief-panel">
-            <div className="flex items-center gap-2 mb-2">
-              <Zap size={10} className="text-[#0066FF]" />
-              <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold font-mono">Market Brief</span>
-            </div>
-            {briefLoading ? (
-              <div className="text-zinc-700 text-[11px] font-mono">Generating brief...</div>
-            ) : brief ? (
-              <p className="text-zinc-400 text-[11px] leading-relaxed font-mono">{brief}</p>
-            ) : (
-              <p className="text-zinc-700 text-[11px] font-mono">No brief available.</p>
-            )}
-          </div>
         </div>
       </div>
 
-      {/* Signal Detail Modal */}
+      {/* RIGHT PANEL */}
+      <div style={{
+        gridRow: "2",
+        borderLeft: "1px solid #0d0d0d",
+        display: "flex",
+        flexDirection: "column",
+        background: "#030303",
+        overflowY: "auto",
+      }}>
+        <TodayStats signals={allSignals} />
+        <SignalSummary brief={brief} isGenerating={briefLoading} briefAge={briefAge} />
+        <WatchlistZone watchlist={watchlist} signals={allSignals} onAdd={addTicker} onRemove={removeTicker} />
+      </div>
+
+      {/* MODAL */}
       {selectedSignal && (
         <SignalDetailModal
           signal={selectedSignal}
           onClose={() => setSelectedSignal(null)}
         />
       )}
-
-      {/* Pulse animation keyframes */}
-      <style>{`
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.4; }
-        }
-        @keyframes slideIn {
-          from {
-            opacity: 0;
-            transform: translateY(-8px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-        @keyframes flashHighlight {
-          0% { background-color: rgba(0, 102, 255, 0.1); }
-          100% { background-color: transparent; }
-        }
-        .signal-new {
-          animation: slideIn 0.3s ease-out, flashHighlight 2s ease-out;
-        }
-      `}</style>
     </div>
   );
 }

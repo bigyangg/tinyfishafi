@@ -49,6 +49,14 @@ class UserLogin(BaseModel):
 class WatchlistAdd(BaseModel):
     ticker: str
 
+class SignalCorrection(BaseModel):
+    correction: str  # "Positive" / "Neutral" / "Risk"
+
+class ConfigUpdate(BaseModel):
+    tier1_tickers: Optional[List[str]] = None
+    tier2_sectors: Optional[List[str]] = None
+    settings: Optional[dict] = None
+
 # ============ AUTH HELPERS ============
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if not credentials:
@@ -131,7 +139,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # ============ SIGNAL HELPERS ============
 def format_signal_for_api(row):
     """Convert Supabase row to API response format (map column names)."""
-    return {
+    result = {
         "id": row.get("id", ""),
         "ticker": row.get("ticker", ""),
         "filing_type": row.get("filing_type", "8-K"),
@@ -142,7 +150,15 @@ def format_signal_for_api(row):
         "filed_at": row.get("filed_at", ""),
         "accession_number": row.get("accession_number", ""),
         "edgar_url": row.get("edgar_url", ""),
+        # Phase 3 enrichment fields
+        "event_type": row.get("event_type"),
+        "filing_subtype": row.get("filing_subtype"),
+        "impact_score": row.get("impact_score"),
+        "sentiment_delta": row.get("sentiment_delta"),
+        "sentiment_match": row.get("sentiment_match"),
+        "user_correction": row.get("user_correction"),
     }
+    return result
 
 # ============ SIGNALS ROUTES ============
 @api_router.get("/signals")
@@ -158,6 +174,41 @@ async def get_signals(tickers: Optional[str] = None):
     except Exception as e:
         logger.error(f"Failed to fetch signals: {e}")
         return {"signals": [], "total": 0, "error": str(e)}
+
+@api_router.post("/signals/{signal_id}/correct")
+async def correct_signal(signal_id: str, data: SignalCorrection):
+    """Store user correction for a signal (feedback loop)."""
+    if data.correction not in ("Positive", "Neutral", "Risk"):
+        raise HTTPException(status_code=400, detail="Correction must be Positive, Neutral, or Risk")
+    try:
+        # Increment correction count and set correction
+        existing = supabase.table("signals").select("correction_count").eq("id", signal_id).execute()
+        if not existing.data:
+            raise HTTPException(status_code=404, detail="Signal not found")
+        
+        current_count = existing.data[0].get("correction_count", 0) or 0
+        supabase.table("signals").update({
+            "user_correction": data.correction,
+            "correction_count": current_count + 1,
+        }).eq("id", signal_id).execute()
+        return {"status": "corrected", "signal_id": signal_id, "correction": data.correction}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to correct signal: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.get("/signals/{signal_id}/correlation")
+async def get_signal_correlation(signal_id: str):
+    """Get price correlation data for a signal."""
+    try:
+        result = supabase.table("price_correlations").select("*").eq("signal_id", signal_id).execute()
+        if not result.data:
+            return {"correlation": None}
+        return {"correlation": result.data[0]}
+    except Exception as e:
+        logger.error(f"Failed to fetch correlation: {e}")
+        return {"correlation": None, "error": str(e)}
 
 # ============ WATCHLIST ROUTES ============
 @api_router.get("/watchlist")
@@ -209,6 +260,30 @@ async def remove_from_watchlist(ticker: str, current_user: dict = Depends(get_cu
     tickers = [row["ticker"] for row in (result.data or [])]
     return {"tickers": tickers}
 
+# ============ TICKER SEARCH PROXY ============
+@api_router.get("/ticker/search")
+async def ticker_search(q: str = ""):
+    """Proxy Yahoo Finance symbol search to avoid CORS issues."""
+    if not q or len(q) < 1:
+        return {"results": []}
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(
+                f"https://query2.finance.yahoo.com/v1/finance/search?q={q}&quotesCount=8&newsCount=0&enableFuzzyQuery=false",
+                headers={"User-Agent": "Mozilla/5.0"}
+            )
+            data = resp.json()
+            quotes = data.get("quotes", [])
+            results = [
+                {"ticker": quote.get("symbol", ""), "name": quote.get("shortname", quote.get("longname", "")), "exchange": quote.get("exchDisp", "")}
+                for quote in quotes
+                if quote.get("quoteType") in ["EQUITY", "ETF"] and quote.get("symbol")
+            ]
+            return {"results": results[:6]}
+    except Exception:
+        return {"results": []}
+
 # ============ EDGAR AGENT CONTROL ============
 edgar_agent_instance = None
 
@@ -243,6 +318,52 @@ async def edgar_stop():
         return {"status": "not_running", "message": "EDGAR agent was not running"}
     edgar_agent_instance.stop()
     return {"status": "stopped", "message": "EDGAR polling agent stopped"}
+
+# ============ AGENT CONFIG ============
+@api_router.get("/config")
+async def get_config():
+    """Get current agent configuration."""
+    try:
+        result = supabase.table("agent_config").select("*").limit(1).execute()
+        if not result.data:
+            return {"config": None}
+        config = result.data[0]
+        return {
+            "config_version": config.get("config_version", 1),
+            "tier1_tickers": config.get("tier1_tickers", []),
+            "tier2_sectors": config.get("tier2_sectors", []),
+            "pending_promotions": config.get("pending_promotions", []),
+            "settings": config.get("settings", {}),
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch config: {e}")
+        return {"config": None, "error": str(e)}
+
+@api_router.post("/config")
+async def update_config(data: ConfigUpdate):
+    """Update agent configuration (increments version)."""
+    try:
+        result = supabase.table("agent_config").select("*").limit(1).execute()
+        if not result.data:
+            raise HTTPException(status_code=404, detail="No config found")
+
+        current = result.data[0]
+        update = {"config_version": current.get("config_version", 1) + 1}
+        
+        if data.tier1_tickers is not None:
+            update["tier1_tickers"] = data.tier1_tickers
+        if data.tier2_sectors is not None:
+            update["tier2_sectors"] = data.tier2_sectors
+        if data.settings is not None:
+            update["settings"] = data.settings
+        
+        supabase.table("agent_config").update(update).eq("id", current["id"]).execute()
+        return {"status": "updated", "config_version": update["config_version"]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ============ HEALTH CHECK ============
 @api_router.get("/health")
@@ -354,12 +475,12 @@ async def startup_event():
     # Step 1: Clean seed data
     await cleanup_seed_data()
 
-    # Step 2: Auto-start EDGAR agent
+    # Step 2: Auto-start EDGAR agent (pipeline + price tracker init inside)
     try:
         from edgar_agent import EdgarAgent
         edgar_agent_instance = EdgarAgent(supabase)
         edgar_agent_instance.start()
-        logger.info("EDGAR agent auto-started on server boot")
+        logger.info("EDGAR agent auto-started on server boot (pipeline + price tracker)")
     except Exception as e:
         logger.error(f"Failed to auto-start EDGAR agent: {e}")
 

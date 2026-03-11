@@ -1,112 +1,215 @@
-// components/AlertCard.jsx — Signal card component (clickable)
-// Purpose: Renders one signal alert with hover affordance, confidence bar, animation
+// AlertCard.jsx — TICKER -> EVENT -> VERDICT
 
-import { ChevronRight } from 'lucide-react';
+import { useState, useEffect } from 'react';
 
-const BADGE_STYLES = {
-  Positive: 'bg-[#00C805]/10 text-[#00C805] border border-[#00C805]/20',
-  Risk: 'bg-[#FF3333]/10 text-[#FF3333] border border-[#FF3333]/20',
-  Neutral: 'bg-zinc-800 text-zinc-400 border border-zinc-700',
-  Pending: 'bg-yellow-900/20 text-yellow-500 border border-yellow-700/30',
-};
-
-const SIGNAL_DOTS = {
-  Positive: 'bg-[#00C805]',
-  Risk: 'bg-[#FF3333]',
-  Neutral: 'bg-zinc-500',
-  Pending: 'bg-yellow-500',
-};
-
-function relativeTime(isoString) {
-  if (!isoString) return '';
-  const date = new Date(isoString);
-  const now = new Date();
-  const diffMs = now - date;
-  const diffSec = Math.floor(diffMs / 1000);
-  if (diffSec < 60) return 'just now';
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffH = Math.floor(diffMin / 60);
-  if (diffH < 24) return `${diffH}h ago`;
-  const diffD = Math.floor(diffH / 24);
-  if (diffD === 1) return 'yesterday';
-  if (diffD < 7) return `${diffD}d ago`;
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+function formatRelativeTime(ts) {
+  if (!ts) return "—";
+  const diff = Date.now() - new Date(ts).getTime();
+  const mins = Math.floor(diff / 60000);
+  const hours = Math.floor(mins / 60);
+  const days = Math.floor(hours / 24);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  return `${days}d ago`;
 }
 
-function confidenceColor(confidence) {
-  if (confidence >= 80) return '#00C805';
-  if (confidence >= 50) return '#F59E0B';
-  return '#FF3333';
-}
+const SIGNAL_CONFIG = {
+  Positive: { color: "#00C805", label: "OPPORTUNITY", bg: "#00C80510" },
+  Risk: { color: "#FF3333", label: "RISK", bg: "#FF333310" },
+  Neutral: { color: "#444", label: "ROUTINE", bg: "transparent" },
+  Pending: { color: "#333", label: "PROCESSING", bg: "transparent" },
+};
 
-export default function AlertCard({ signal, onClick, isNew }) {
-  const { ticker, filing_type, classification, company_name, summary, confidence, filed_at } = signal;
-  const badgeStyle = BADGE_STYLES[classification] || BADGE_STYLES.Neutral;
-  const dotStyle = SIGNAL_DOTS[classification] || SIGNAL_DOTS.Neutral;
-  const confColor = confidenceColor(confidence);
+const IMPACT_LABEL = (score) => {
+  if (score >= 65) return { label: "HIGH IMPACT", color: "#FF6B00" };
+  if (score >= 35) return { label: "MED IMPACT", color: "#FFB300" };
+  return { label: "LOW IMPACT", color: "#2a2a2a" };
+};
+
+// Clean up summaries that say nothing:
+const cleanSummary = (summary, ticker, company) => {
+  const junk = [
+    "filed a routine administrative 8-K",
+    "filed an 8-K to report a current event",
+    "announced an 8-K filing",
+    "company filed a routine administrative 8-K",
+    "Unable to provide a summary",
+    "without its full text content",
+  ];
+  if (!summary) return null;
+  const lower = summary.toLowerCase();
+  for (const j of junk) {
+    if (lower.includes(j.toLowerCase())) return null; // return null = show PROCESSING state
+  }
+  return summary;
+};
+
+export default function AlertCard({ signal, isWatched, onToggleWatch, onClick, isNew }) {
+  // Live relative timestamps — re-render every 30s
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setTick(t => t + 1), 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const cfg = SIGNAL_CONFIG[signal.classification] || SIGNAL_CONFIG.Neutral;
+  const impact = IMPACT_LABEL(signal.impact_score || 0);
+  const summary = cleanSummary(signal.summary, signal.ticker, signal.company_name);
+  const isProcessing = !summary || signal.classification === 'Pending';
+  const isRoutine = signal.classification === "Neutral" || signal.classification === "Pending";
 
   return (
     <div
-      className={`bg-[#0A0A0A] border border-zinc-800 hover:border-zinc-600 p-5 transition-all duration-75 cursor-pointer group ${isNew ? 'signal-new' : ''}`}
-      data-testid={`alert-card-${signal.id}`}
       onClick={() => onClick && onClick(signal)}
+      className={isNew ? 'signal-enter' : ''}
+      data-testid={`alert-card-${signal.id}`}
+      style={{
+        display: "flex",
+        borderBottom: "1px solid #0f0f0f",
+        background: "#050505",
+        cursor: "pointer",
+        transition: "background 80ms",
+        opacity: isProcessing ? 0.45 : 1,
+      }}
+      onMouseEnter={e => e.currentTarget.style.background = "#0a0a0a"}
+      onMouseLeave={e => e.currentTarget.style.background = "#050505"}
     >
-      {/* Header row */}
-      <div className="flex items-center gap-3 mb-3">
-        <span className="font-mono font-bold text-white text-sm tracking-wide" data-testid={`ticker-${signal.id}`}>
-          {ticker}
-        </span>
-        <span className="bg-zinc-900 border border-zinc-800 text-zinc-400 text-[10px] font-mono px-2 py-0.5 uppercase tracking-wider">
-          {filing_type}
-        </span>
-        <span
-          className={`flex items-center gap-1.5 text-[10px] font-mono font-bold px-2 py-0.5 uppercase tracking-wider ${badgeStyle}`}
-          data-testid={`signal-badge-${signal.id}`}
-        >
-          <span className={`w-1.5 h-1.5 rounded-full ${dotStyle}`}></span>
-          {classification}
-        </span>
-        <div className="ml-auto flex items-center gap-2">
-          <div className="flex flex-col items-end">
-            <span className="font-mono text-[11px] text-zinc-300" data-testid={`confidence-${signal.id}`}>
-              {confidence}%
-            </span>
-            {/* Confidence bar */}
-            <div className="w-12 h-[2px] bg-zinc-800 mt-1">
-              <div
-                className="h-full transition-all duration-300"
-                style={{
-                  width: `${confidence}%`,
-                  backgroundColor: confColor,
-                }}
-              ></div>
-            </div>
-          </div>
-          <span className="text-[9px] uppercase tracking-widest text-zinc-600 font-mono">conf</span>
-        </div>
-      </div>
+      {/* LEFT: Signal color stripe — the verdict at a glance */}
+      <div style={{
+        width: "3px",
+        background: cfg.color,
+        flexShrink: 0,
+        opacity: isRoutine ? 0.2 : 1,
+      }} />
 
-      {/* Summary */}
-      <p className="text-zinc-400 text-sm leading-relaxed mb-4" data-testid={`summary-${signal.id}`}>
-        {summary}
-      </p>
+      {/* MAIN CONTENT */}
+      <div style={{ flex: 1, padding: "14px 16px" }}>
 
-      {/* Footer */}
-      <div className="flex items-center justify-between">
-        <span className="text-zinc-600 text-xs font-mono" data-testid={`company-${signal.id}`}>
-          {company_name}
-        </span>
-        <div className="flex items-center gap-2">
-          <span className="text-zinc-700 text-[11px] font-mono" data-testid={`timestamp-${signal.id}`}>
-            {relativeTime(filed_at)}
+        {/* ROW 1: Ticker + Event + Signal verdict + Watch */}
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "6px" }}>
+
+          {/* Ticker — primary identity, always first */}
+          <span style={{
+            fontFamily: "'IBM Plex Mono', 'JetBrains Mono', monospace",
+            fontWeight: 700,
+            fontSize: "14px",
+            color: signal.ticker === "UNKNOWN" ? "#333" : "#fff",
+            letterSpacing: "0.08em",
+            minWidth: "52px",
+          }}>
+            {signal.ticker === "UNKNOWN" ? "—" : signal.ticker}
           </span>
-          {/* Hover affordance */}
-          <ChevronRight
-            size={12}
-            className="text-zinc-700 opacity-0 group-hover:opacity-100 group-hover:text-[#0066FF] transition-all duration-75"
-          />
+
+          {/* Vertical divider */}
+          <div style={{ width: "1px", height: "14px", background: "#1a1a1a", flexShrink: 0 }} />
+
+          {/* Event type — plain English, not ALL CAPS JUNK */}
+          <span style={{
+            fontSize: "11px",
+            color: "#444",
+            fontFamily: "'IBM Plex Mono', monospace",
+            letterSpacing: "0.03em",
+          }}>
+            {signal.event_type && !["ROUTINE_ADMIN", "UNKNOWN"].includes(signal.event_type)
+              ? signal.event_type
+                .replace(/_/g, " ")
+                .replace(/\b\w/g, c => c.toUpperCase())
+              : "Admin Filing"}
+          </span>
+
+          {/* Watched dot — subtle, not a badge */}
+          {isWatched && (
+            <div style={{
+              width: "5px", height: "5px",
+              borderRadius: "50%",
+              background: "#0066FF",
+              flexShrink: 0,
+              title: "Watching",
+            }} />
+          )}
+
+          <div style={{ flex: 1 }} />
+
+          {/* Signal verdict — only show if not routine */}
+          {!isRoutine && (
+            <span style={{
+              fontSize: "10px",
+              padding: "3px 7px",
+              background: cfg.bg,
+              border: `1px solid ${cfg.color}30`,
+              color: cfg.color,
+              fontFamily: "'IBM Plex Mono', monospace",
+              letterSpacing: "0.08em",
+              fontWeight: 600,
+            }}>
+              {cfg.label}
+            </span>
+          )}
+
+          {/* Impact label — replaces the useless number */}
+          {(signal.impact_score || 0) >= 35 && (
+            <span style={{
+              fontSize: "10px",
+              color: impact.color,
+              fontFamily: "'IBM Plex Mono', monospace",
+              letterSpacing: "0.06em",
+            }}>
+              {impact.label}
+            </span>
+          )}
+
+          {/* Watch/unwatch — minimal */}
+          {onToggleWatch && (
+            <button
+              onClick={e => { e.stopPropagation(); onToggleWatch(signal.ticker); }}
+              style={{
+                background: "none",
+                border: "none",
+                color: isWatched ? "#0066FF" : "#1e1e1e",
+                cursor: "pointer",
+                fontSize: "13px",
+                padding: "0",
+                lineHeight: 1,
+                transition: "color 150ms",
+              }}
+              onMouseEnter={e => !isWatched && (e.currentTarget.style.color = "#444")}
+              onMouseLeave={e => !isWatched && (e.currentTarget.style.color = "#1e1e1e")}
+              title={isWatched ? "Stop watching" : "Watch this ticker"}
+            >
+              {isWatched ? "★" : "☆"}
+            </button>
+          )}
         </div>
+
+        {/* ROW 2: Summary — plain English, dim if processing */}
+        <p style={{
+          margin: "0 0 8px",
+          fontSize: "13px",
+          color: isProcessing ? "#222" : "#777",
+          lineHeight: 1.5,
+          fontStyle: isProcessing ? "italic" : "normal",
+        }}>
+          {isProcessing
+            ? "Processing filing..."
+            : summary}
+        </p>
+
+        {/* ROW 3: Company + Time — minimum necessary */}
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{
+            fontSize: "11px",
+            color: "#2a2a2a",
+            fontFamily: "'IBM Plex Mono', monospace",
+            letterSpacing: "0.04em",
+          }}>
+            {signal.company_name?.replace(", Inc.", "").replace(", LLC", "").replace(" Inc.", "") || ""}
+          </span>
+          <span style={{ fontSize: "11px", color: "#2a2a2a", fontFamily: "'IBM Plex Mono', monospace" }}>
+            {formatRelativeTime(signal.filed_at)}
+          </span>
+        </div>
+
       </div>
     </div>
   );

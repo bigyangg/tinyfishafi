@@ -1,6 +1,6 @@
 # telegram_bot.py — AFI Telegram Alert Bot
 # Purpose: Send formatted signal alerts to Telegram when new filings are processed
-# Dependencies: python-telegram-bot, httpx
+# Dependencies: httpx
 # Env vars: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_ENABLED
 
 import os
@@ -28,7 +28,7 @@ SIGNAL_EMOJI = {
 
 def send_signal_alert(signal_data):
     """
-    Send a formatted Telegram alert for a new signal.
+    Send a formatted Telegram alert for a new signal using HTML parse mode.
     
     Args:
         signal_data: dict with keys: ticker, company, signal, summary, confidence, filed_at
@@ -37,7 +37,6 @@ def send_signal_alert(signal_data):
         logger.info("Telegram disabled — skipping alert")
         return
 
-    # Do not send alerts for Pending signals
     signal_type = signal_data.get("signal", "Pending")
     if signal_type == "Pending":
         logger.info("Signal is Pending — skipping Telegram alert until AI classification completes")
@@ -52,12 +51,16 @@ def send_signal_alert(signal_data):
         return
 
     try:
-        ticker = signal_data.get("ticker", "UNKNOWN")
-        company = signal_data.get("company", "Unknown")
+        ticker = _escape_html(signal_data.get("ticker", "UNKNOWN"))
+        company = _escape_html(signal_data.get("company", "Unknown"))
         signal = signal_data.get("signal", "Neutral")
-        summary = signal_data.get("summary", "")
+        summary = _escape_html(signal_data.get("summary", ""))
         confidence = signal_data.get("confidence", 0)
         filed_at = signal_data.get("filed_at", "")
+        filing_type = _escape_html(signal_data.get("filing_type", "8-K"))
+        event_type = signal_data.get("event_type")
+        impact_score = signal_data.get("impact_score")
+        accession = signal_data.get("accession_number", "")
 
         # Format date
         try:
@@ -71,18 +74,34 @@ def send_signal_alert(signal_data):
 
         emoji = SIGNAL_EMOJI.get(signal, "\u26aa")
 
+        # Build SEC EDGAR URL
+        edgar_url = ""
+        if accession:
+            clean = accession.replace("-", "")
+            edgar_url = f"https://www.sec.gov/Archives/edgar/data/{clean}/{accession}-index.htm"
+
+        # Build enrichment line if available
+        enrichment = ""
+        if event_type:
+            enrichment += f"\nEvent: <code>{_escape_html(event_type)}</code>"
+        if impact_score is not None:
+            enrichment += f" | Impact: <code>{impact_score}/100</code>"
+
         message = (
-            f"\U0001f535 AFI ALERT\n"
+            f"\U0001f535 <b>AFI ALERT</b>\n"
             f"\n"
-            f"{ticker} \u2014 8-K Filing\n"
-            f"Signal: {emoji} {signal}\n"
+            f"<code>{ticker}</code> — {filing_type}\n"
+            f"Signal: {emoji} <b>{signal}</b>\n"
             f"{summary}\n"
             f"\n"
-            f"Confidence: {confidence}% | {date_str}\n"
-            f"\U0001f517 View on AFI Dashboard"
+            f"Confidence: <code>{confidence}%</code> | {date_str}"
+            f"{enrichment}\n"
         )
 
-        _send_telegram_message(message)
+        if edgar_url:
+            message += f'\n<a href="{edgar_url}">View on SEC EDGAR</a>'
+
+        _send_telegram_message(message, parse_mode="HTML")
         logger.info(f"Telegram alert sent for {ticker} ({signal})")
 
     except Exception as e:
@@ -90,7 +109,19 @@ def send_signal_alert(signal_data):
         # Never crash the agent on Telegram failure
 
 
-def _send_telegram_message(text):
+def _escape_html(text):
+    """Escape special HTML characters to prevent parse errors."""
+    if not text:
+        return ""
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def _send_telegram_message(text, parse_mode="HTML"):
     """Send a message via Telegram Bot API using httpx (sync)."""
     try:
         import httpx
@@ -98,11 +129,13 @@ def _send_telegram_message(text):
         payload = {
             "chat_id": CHAT_ID,
             "text": text,
-            "parse_mode": None,  # Plain text to avoid parsing issues
+            "parse_mode": parse_mode,
         }
         with httpx.Client(timeout=10) as client:
             response = client.post(url, json=payload)
-            if response.status_code != 200:
+            if response.status_code == 200:
+                logger.info(f"Telegram message sent successfully (chat_id={CHAT_ID})")
+            else:
                 logger.warning(f"Telegram API returned {response.status_code}: {response.text}")
     except Exception as e:
         logger.error(f"Telegram HTTP request failed: {e}")
@@ -112,20 +145,25 @@ def _send_telegram_message(text):
 def send_test_message():
     """Send a test message to verify Telegram bot configuration."""
     if not TELEGRAM_ENABLED:
-        print("Telegram is disabled (TELEGRAM_ENABLED=false)")
+        logger.info("Telegram is disabled (TELEGRAM_ENABLED=false)")
         return False
 
     if not BOT_TOKEN or not CHAT_ID:
-        print(f"Missing config: BOT_TOKEN={'set' if BOT_TOKEN else 'missing'}, CHAT_ID={'set' if CHAT_ID else 'missing'}")
+        logger.warning(f"Missing config: BOT_TOKEN={'set' if BOT_TOKEN else 'missing'}, CHAT_ID={'set' if CHAT_ID else 'missing'}")
         return False
 
-    _send_telegram_message(
-        "\U0001f535 AFI Bot Test\n\n"
-        "Telegram integration is working.\n"
-        "You will receive alerts when new SEC filings are detected."
-    )
-    print("Test message sent!")
-    return True
+    try:
+        _send_telegram_message(
+            "\U0001f535 <b>AFI Bot Test</b>\n\n"
+            "Telegram integration is working.\n"
+            "You will receive alerts when new SEC filings are detected.",
+            parse_mode="HTML",
+        )
+        logger.info("Test message sent successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Test message failed: {e}")
+        return False
 
 
 if __name__ == "__main__":

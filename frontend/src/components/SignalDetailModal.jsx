@@ -1,140 +1,199 @@
-// components/SignalDetailModal.jsx — Signal detail modal overlay
-// Purpose: Shows full signal details when an alert card is clicked
-// Dependencies: lucide-react
+// SignalDetailModal.jsx — Full overlay modal with correlation fetch
+// Bloomberg Terminal aesthetic. No navigation — stays on dashboard.
+// Fetches price correlation inline. Closes on Escape.
 
-import { X, ExternalLink } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
 
-const BADGE_STYLES = {
-    Positive: 'bg-[#00C805]/10 text-[#00C805] border border-[#00C805]/20',
-    Risk: 'bg-[#FF3333]/10 text-[#FF3333] border border-[#FF3333]/20',
-    Neutral: 'bg-zinc-800 text-zinc-400 border border-zinc-700',
-    Pending: 'bg-yellow-900/20 text-yellow-500 border border-yellow-700/30',
-};
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8001';
 
-const SIGNAL_DOTS = {
-    Positive: 'bg-[#00C805]',
-    Risk: 'bg-[#FF3333]',
-    Neutral: 'bg-zinc-500',
-    Pending: 'bg-yellow-500',
-};
+function SignalBadge({ signal }) {
+    const colors = {
+        Positive: "#00C805",
+        Risk: "#FF3333",
+        Neutral: "#525252",
+        Pending: "#333",
+    };
+    const c = colors[signal] || "#525252";
+    if (signal === "Neutral" || signal === "Pending") return null;
+    return (
+        <span style={{
+            fontSize: "10px",
+            padding: "2px 6px",
+            background: `${c}18`,
+            border: `1px solid ${c}44`,
+            color: c,
+            fontFamily: "'IBM Plex Mono', monospace",
+            letterSpacing: "0.06em",
+        }}>
+            {signal?.toUpperCase()}
+        </span>
+    );
+}
 
 export default function SignalDetailModal({ signal, onClose }) {
+    const [correlation, setCorrelation] = useState(null);
+
+    // Fetch correlation data
+    useEffect(() => {
+        if (!signal?.id) return;
+        fetch(`${BACKEND_URL}/api/signals/${signal.id}/correlation`)
+            .then(r => r.ok ? r.json() : null)
+            .then(data => data && setCorrelation(data))
+            .catch(() => null);
+    }, [signal?.id]);
+
+    // Close on Escape
+    const handleKeyDown = useCallback(e => {
+        if (e.key === "Escape") onClose();
+    }, [onClose]);
+
+    useEffect(() => {
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+    }, [handleKeyDown]);
+
     if (!signal) return null;
 
-    const { ticker, filing_type, classification, company_name, summary, confidence, filed_at, accession_number, edgar_url } = signal;
-    const badgeStyle = BADGE_STYLES[classification] || BADGE_STYLES.Neutral;
-    const dotStyle = SIGNAL_DOTS[classification] || SIGNAL_DOTS.Neutral;
-
-    const formatDate = (iso) => {
-        try {
-            const d = new Date(iso);
-            return d.toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
-        } catch {
-            return iso;
-        }
-    };
-
-    const formatTime = (iso) => {
-        try {
-            return new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' });
-        } catch {
-            return '';
-        }
-    };
-
-    // Build EDGAR URL from accession number
-    const edgarLink = edgar_url || (accession_number
-        ? `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${accession_number}&type=8-K&dateb=&owner=include&count=10`
-        : null);
+    const edgarLink = signal.ticker && signal.ticker !== "UNKNOWN"
+        ? `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${signal.ticker}&type=8-K&dateb=&owner=include&count=5`
+        : signal.accession_number
+            ? `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${signal.accession_number}&type=8-K&dateb=&owner=include&count=10`
+            : null;
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" data-testid="signal-modal-overlay">
+        <>
             {/* Backdrop */}
-            <div className="absolute inset-0 bg-black/80" onClick={onClose} />
-
-            {/* Modal */}
-            <div className="relative bg-[#0A0A0A] border border-zinc-800 w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto" data-testid="signal-modal">
-                {/* Header */}
-                <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
-                    <div className="flex items-center gap-3">
-                        <span className="font-mono font-bold text-white text-lg tracking-wide">{ticker}</span>
-                        <span className={`flex items-center gap-1.5 text-[10px] font-mono font-bold px-2 py-0.5 uppercase tracking-wider ${badgeStyle}`}>
-                            <span className={`w-1.5 h-1.5 rounded-full ${dotStyle}`}></span>
-                            {classification}
-                        </span>
+            <div
+                onClick={onClose}
+                data-testid="signal-modal-overlay"
+                style={{
+                    position: "fixed", inset: 0,
+                    background: "rgba(0,0,0,0.7)",
+                    backdropFilter: "blur(2px)",
+                    zIndex: 100,
+                    animation: "fadeIn 150ms ease",
+                }}
+            />
+            {/* Modal panel */}
+            <div
+                data-testid="signal-modal"
+                style={{
+                    position: "fixed",
+                    top: "50%", left: "50%",
+                    transform: "translate(-50%, -50%)",
+                    width: "min(560px, 90vw)",
+                    maxHeight: "80vh",
+                    background: "#080808",
+                    border: "1px solid #1a1a1a",
+                    zIndex: 101,
+                    overflow: "auto",
+                    animation: "slideDown 150ms ease",
+                    padding: "24px",
+                }}
+            >
+                {/* Modal header */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "20px" }}>
+                    <div>
+                        <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "4px" }}>
+                            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: "18px", color: "#fff" }}>
+                                {signal.ticker}
+                            </span>
+                            <SignalBadge signal={signal.classification} />
+                            {signal.event_type && !["ROUTINE_ADMIN", "UNKNOWN"].includes(signal.event_type) && (
+                                <span style={{
+                                    fontSize: "10px",
+                                    padding: "2px 6px",
+                                    background: "#0066FF12",
+                                    border: "1px solid #0066FF30",
+                                    color: "#0066FF",
+                                    fontFamily: "'IBM Plex Mono', monospace",
+                                }}>
+                                    {signal.event_type.replace(/_/g, " ")}
+                                </span>
+                            )}
+                        </div>
+                        <p style={{ margin: 0, fontSize: "13px", color: "#444", fontFamily: "'IBM Plex Mono', monospace" }}>
+                            {signal.company_name}
+                        </p>
                     </div>
                     <button
                         onClick={onClose}
-                        className="text-zinc-600 hover:text-white transition-colors duration-75"
                         data-testid="signal-modal-close"
+                        style={{ background: "none", border: "none", color: "#333", cursor: "pointer", fontSize: "18px", padding: "0 4px" }}
                     >
-                        <X size={18} />
+                        ✕
                     </button>
                 </div>
 
-                {/* Body */}
-                <div className="px-6 py-5 space-y-5">
-                    {/* Company */}
-                    <div>
-                        <div className="text-[10px] uppercase tracking-widest text-zinc-600 font-mono mb-1">Company</div>
-                        <div className="text-white text-sm">{company_name}</div>
+                {/* Summary */}
+                <p style={{ fontSize: "14px", color: "#888", lineHeight: 1.6, marginBottom: "20px" }}>
+                    {signal.summary}
+                </p>
+
+                {/* Metadata grid */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "20px" }}>
+                    {[
+                        { label: "FILED", value: signal.filed_at ? new Date(signal.filed_at).toLocaleString() : "—" },
+                        { label: "CONFIDENCE", value: `${signal.confidence}%` },
+                        { label: "IMPACT SCORE", value: signal.impact_score ?? "—" },
+                        { label: "EVENT TYPE", value: signal.event_type?.replace(/_/g, " ") || "—" },
+                    ].map(({ label, value }) => (
+                        <div key={label}>
+                            <div style={{ fontSize: "10px", color: "#333", fontFamily: "'IBM Plex Mono', monospace", marginBottom: "3px", letterSpacing: "0.08em" }}>{label}</div>
+                            <div style={{ fontSize: "13px", color: "#888", fontFamily: "'IBM Plex Mono', monospace" }}>{value}</div>
+                        </div>
+                    ))}
+                </div>
+
+                {/* Price correlation */}
+                {correlation && (
+                    <div style={{ borderTop: "1px solid #111", paddingTop: "16px" }}>
+                        <div style={{ fontSize: "10px", color: "#333", fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.08em", marginBottom: "12px" }}>PRICE IMPACT</div>
+                        <div style={{ display: "flex", gap: "24px" }}>
+                            {[
+                                { label: "1H", value: correlation.pct_change_1h },
+                                { label: "24H", value: correlation.pct_change_24h },
+                                { label: "3D", value: correlation.pct_change_3d },
+                            ].map(({ label, value }) => (
+                                <div key={label}>
+                                    <div style={{ fontSize: "10px", color: "#333", fontFamily: "'IBM Plex Mono', monospace", marginBottom: "4px" }}>{label}</div>
+                                    <div style={{
+                                        fontSize: "20px",
+                                        fontFamily: "'IBM Plex Mono', monospace",
+                                        fontWeight: 600,
+                                        color: value == null ? "#222" : value > 0 ? "#00C805" : value < 0 ? "#FF3333" : "#555"
+                                    }}>
+                                        {value == null ? "—" : `${value > 0 ? "+" : ""}${value.toFixed(2)}%`}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
                     </div>
+                )}
 
-                    {/* Filing Type */}
-                    <div className="flex items-center gap-6">
-                        <div>
-                            <div className="text-[10px] uppercase tracking-widest text-zinc-600 font-mono mb-1">Filing Type</div>
-                            <span className="bg-zinc-900 border border-zinc-800 text-zinc-400 text-[10px] font-mono px-2 py-0.5 uppercase tracking-wider">
-                                {filing_type}
-                            </span>
-                        </div>
-                        <div>
-                            <div className="text-[10px] uppercase tracking-widest text-zinc-600 font-mono mb-1">Confidence</div>
-                            <span className="font-mono text-white text-sm">{confidence}%</span>
-                        </div>
+                {/* Accession number */}
+                {signal.accession_number && (
+                    <div style={{ borderTop: "1px solid #0d0d0d", marginTop: "16px", paddingTop: "12px" }}>
+                        <div style={{ fontSize: "10px", color: "#222", fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.08em", marginBottom: "3px" }}>ACCESSION</div>
+                        <div style={{ fontSize: "11px", color: "#333", fontFamily: "'IBM Plex Mono', monospace" }}>{signal.accession_number}</div>
                     </div>
+                )}
 
-                    {/* Summary */}
-                    <div>
-                        <div className="text-[10px] uppercase tracking-widest text-zinc-600 font-mono mb-1">Summary</div>
-                        <p className="text-zinc-300 text-sm leading-relaxed">{summary}</p>
-                    </div>
-
-                    {/* Filed Date */}
-                    <div className="flex items-center gap-6">
-                        <div>
-                            <div className="text-[10px] uppercase tracking-widest text-zinc-600 font-mono mb-1">Filed Date</div>
-                            <div className="text-zinc-300 text-sm font-mono">{formatDate(filed_at)}</div>
-                        </div>
-                        <div>
-                            <div className="text-[10px] uppercase tracking-widest text-zinc-600 font-mono mb-1">Time</div>
-                            <div className="text-zinc-300 text-sm font-mono">{formatTime(filed_at)}</div>
-                        </div>
-                    </div>
-
-                    {/* Accession Number */}
-                    {accession_number && (
-                        <div>
-                            <div className="text-[10px] uppercase tracking-widest text-zinc-600 font-mono mb-1">Accession Number</div>
-                            <div className="text-zinc-500 text-xs font-mono">{accession_number}</div>
-                        </div>
-                    )}
-
-                    {/* EDGAR Link */}
-                    {edgarLink && (
+                {/* SEC link */}
+                {edgarLink && (
+                    <div style={{ borderTop: "1px solid #0d0d0d", marginTop: "16px", paddingTop: "16px" }}>
                         <a
                             href={edgarLink}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex items-center gap-2 bg-[#0066FF]/10 border border-[#0066FF]/20 text-[#0066FF] text-xs font-mono px-4 py-2.5 hover:bg-[#0066FF]/20 transition-colors duration-75"
                             data-testid="signal-modal-edgar-link"
+                            style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: "11px", color: "#0066FF", textDecoration: "none", letterSpacing: "0.06em" }}
                         >
-                            <ExternalLink size={12} />
-                            View on SEC EDGAR
+                            VIEW ON SEC EDGAR ↗
                         </a>
-                    )}
-                </div>
+                    </div>
+                )}
             </div>
-        </div>
+        </>
     );
 }
