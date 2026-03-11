@@ -353,15 +353,11 @@ const TodayStats = ({ signals }) => {
 
 const TopSignals = ({ signals, watchlist = [] }) => {
   const topSignals = useMemo(() => {
-    const watchlistSignals = signals
-      .filter(s => watchlist.includes(s.ticker))
-      .sort((a, b) => (b.impact_score || 0) - (a.impact_score || 0));
-    const watchlistTickers = new Set(watchlistSignals.map(s => s.ticker));
-    const otherSignals = signals
-      .filter(s => !watchlistTickers.has(s.ticker) && (s.classification !== 'Neutral' || (s.impact_score || 0) >= 55))
-      .sort((a, b) => (b.impact_score || 0) - (a.impact_score || 0));
-    return [...watchlistSignals, ...otherSignals].slice(0, 5);
-  }, [signals, watchlist]);
+    return [...signals]
+      .filter(s => s.classification !== 'Neutral' || (s.impact_score || 0) >= 60)
+      .sort((a, b) => (b.impact_score || 0) - (a.impact_score || 0))
+      .slice(0, 5);
+  }, [signals]);
 
   return (
     <div style={{ padding: '14px', borderBottom: '1px solid #141414' }}>
