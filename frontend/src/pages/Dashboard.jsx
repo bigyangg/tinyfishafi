@@ -424,16 +424,22 @@ const MarketBrief = ({ brief, isGenerating, briefAge }) => {
 
       {!isGenerating && brief && (
         <div style={{
-          background: '#0a0a0a', border: '1px solid #141414', borderRadius: '4px',
-          padding: '12px', borderLeft: '3px solid #0066FF30',
+          background: '#030303', border: '1px solid #141414', borderRadius: '6px',
+          padding: '16px', position: 'relative', overflow: 'hidden',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
         }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {/* Subtle top left accent instead of full border left */}
+          <div style={{ position: 'absolute', top: 0, left: 0, width: '4px', height: '100%', background: 'linear-gradient(180deg, #0066FF 0%, transparent 100%)' }} />
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             {brief.split(/(?<=[.!?])\s+/).slice(0, 3).map((sentence, i) => (
               <p key={i} style={{
                 margin: 0,
                 fontSize: i === 0 ? '12px' : '11px',
-                color: i === 0 ? '#888' : '#444',
-                lineHeight: 1.55,
+                color: i === 0 ? '#eee' : '#777',
+                lineHeight: 1.6,
+                fontFamily: "'JetBrains Mono', monospace",
+                letterSpacing: '-0.01em',
               }}>
                 {sentence}
               </p>
