@@ -3,8 +3,10 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import Landing from './pages/Landing';
 import Auth from './pages/Auth';
 import Dashboard from './pages/Dashboard';
-import Pricing from './pages/Pricing';
-import './App.css';
+import Watchlist from './pages/Watchlist';
+import Signal from './pages/Signal';
+import Settings from './pages/Settings';
+import './index.css';
 
 const ProtectedRoute = ({ children }) => {
   const { user } = useAuth();
@@ -26,7 +28,9 @@ function App() {
           <Route path="/" element={<Landing />} />
           <Route path="/auth" element={<PublicOnlyRoute><Auth /></PublicOnlyRoute>} />
           <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-          <Route path="/pricing" element={<Pricing />} />
+          <Route path="/watchlist" element={<ProtectedRoute><Watchlist /></ProtectedRoute>} />
+          <Route path="/signal/:id" element={<ProtectedRoute><Signal /></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>

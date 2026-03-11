@@ -1,9 +1,10 @@
-// Dashboard.jsx — Bloomberg Terminal x Linear professional dashboard
+// Dashboard.jsx — Live filing feed + right panel
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
-import DashboardSidebar from '../components/DashboardSidebar';
+import AppShell from '../components/AppShell';
 import AlertCard from '../components/AlertCard';
 import SignalDetailModal from '../components/SignalDetailModal';
 import { SignalSkeleton, StatsSkeleton, WatchlistSkeleton } from '../components/SignalSkeleton';
@@ -20,132 +21,288 @@ function debounce(func, wait) {
   };
 }
 
-// === FIX 5: STATUS BAR ===
-const StatusBar = ({ agentStatus, isOnline, filedToday }) => (
-  <div style={{
-    height: "40px",
-    borderBottom: "1px solid #0d0d0d",
-    display: "flex",
-    alignItems: "center",
-    padding: "0 16px",
-    gap: "16px",
-    background: "#030303",
-  }}>
-    {/* Agent status */}
-    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-      <div style={{
-        width: "5px", height: "5px",
-        borderRadius: "50%",
-        background: agentStatus === "running" ? "#00C805" : "#FF3333",
-        animation: agentStatus === "running" ? "pulse-green 3s ease-in-out infinite" : "none",
-      }} />
-      <span style={{
-        fontFamily: "'IBM Plex Mono', monospace",
-        fontSize: "10px",
-        color: agentStatus === "running" ? "#555" : "#FF3333",
-        letterSpacing: "0.08em",
-      }}>
-        {agentStatus === "running" ? "MONITORING SEC EDGAR" : "AGENT OFFLINE"}
-      </span>
-    </div>
+// StatusBar and agent polling now handled by AppShell
 
-    {/* Filings today */}
-    {filedToday > 0 && (
-      <span style={{
-        fontFamily: "'IBM Plex Mono', monospace",
-        fontSize: "10px",
-        color: "#333",
-      }}>
-        {filedToday} filing{filedToday !== 1 ? "s" : ""} today
-      </span>
-    )}
+// ── CATEGORY SYSTEM ──
+const CATEGORY_MAP = {
+  EARNINGS_BEAT: { group: 'EARNINGS & FINANCIAL', priority: 1 },
+  EARNINGS_MISS: { group: 'EARNINGS & FINANCIAL', priority: 1 },
+  DIVIDEND: { group: 'EARNINGS & FINANCIAL', priority: 1 },
+  DEBT_FINANCING: { group: 'EARNINGS & FINANCIAL', priority: 1 },
+  ASSET_SALE: { group: 'EARNINGS & FINANCIAL', priority: 1 },
+  EXEC_DEPARTURE: { group: 'LEADERSHIP & CORP EVENTS', priority: 2 },
+  EXEC_APPOINTMENT: { group: 'LEADERSHIP & CORP EVENTS', priority: 2 },
+  MERGER_ACQUISITION: { group: 'LEADERSHIP & CORP EVENTS', priority: 2 },
+  MATERIAL_EVENT: { group: 'LEADERSHIP & CORP EVENTS', priority: 2 },
+  LEGAL_REGULATORY: { group: 'REGULATORY & LEGAL', priority: 3 },
+  ROUTINE_ADMIN: { group: 'ROUTINE FILINGS', priority: 4 },
+};
 
-    <div style={{ flex: 1 }} />
+const GROUP_COLORS = {
+  'EARNINGS & FINANCIAL': '#00C805',
+  'LEADERSHIP & CORP EVENTS': '#FF6B00',
+  'REGULATORY & LEGAL': '#FF3333',
+  'ROUTINE FILINGS': '#1e1e1e',
+};
 
-    {/* Connection */}
-    <div style={{
-      fontFamily: "'IBM Plex Mono', monospace",
-      fontSize: "10px",
-      color: isOnline ? "#2a2a2a" : "#FF333380",
-      letterSpacing: "0.06em",
-    }}>
-      {isOnline ? "●" : "○ DISCONNECTED"}
-    </div>
-  </div>
-);
+const getCategory = (signal) => {
+  if (!signal.event_type || signal.event_type === 'ROUTINE_ADMIN') {
+    if ((signal.impact_score || 0) >= 50 && signal.classification !== 'Neutral') {
+      return { group: 'LEADERSHIP & CORP EVENTS', priority: 2 };
+    }
+    return { group: 'ROUTINE FILINGS', priority: 4 };
+  }
+  return CATEGORY_MAP[signal.event_type] || { group: 'ROUTINE FILINGS', priority: 4 };
+};
 
-// === FIX 4: FEED HEADER ===
-const FeedHeader = ({ filter, setFilter, count, tabCounts }) => (
-  <div style={{
-    display: "flex",
-    alignItems: "center",
-    padding: "0 20px",
-    height: "48px",
-    borderBottom: "1px solid #0d0d0d",
-    gap: "0",
-    flexShrink: 0,
-  }}>
-    <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginRight: "24px" }}>
-      <span style={{ fontSize: "14px", fontWeight: 600, color: "#fff" }}>
-        Filings
-      </span>
-      <span style={{
-        fontFamily: "'IBM Plex Mono', monospace",
-        fontSize: "12px",
-        color: "#333",
-      }}>
-        {count}
-      </span>
-    </div>
+// ── CATEGORY SECTION (collapsible accordion) ──
+const CategorySection = ({ name, signals: sigs, watchlist, onToggleWatch, onSelect, color, dimmed }) => {
+  const [collapsed, setCollapsed] = useState(name === 'ROUTINE FILINGS');
 
-    {["ALL", "WATCHLIST", "RISK", "OPPORTUNITY"].map(f => (
-      <button
-        key={f}
-        onClick={() => setFilter(f)}
+  const previewTickers = sigs.slice(0, 3).map(s => s.ticker);
+
+  return (
+    <div style={{ margin: '8px 10px' }}>
+      {/* Accordion header — looks like a distinct clickable card */}
+      <div
+        onClick={() => setCollapsed(c => !c)}
         style={{
-          padding: "10px 14px",
-          background: "transparent",
-          border: "none",
-          borderBottom: filter === f ? "1px solid #fff" : "1px solid transparent",
-          marginBottom: "-1px",
-          color: filter === f ? "#fff" : "#2a2a2a",
-          fontFamily: "'IBM Plex Mono', monospace",
-          fontSize: "11px",
-          letterSpacing: "0.08em",
-          cursor: "pointer",
-          transition: "color 100ms",
+          display: 'flex', alignItems: 'center', gap: '10px',
+          padding: '10px 14px',
+          background: collapsed ? '#0c0c0c' : '#111',
+          border: `1px solid ${collapsed ? '#1e1e1e' : '#282828'}`,
+          borderRadius: collapsed ? '6px' : '6px 6px 0 0',
+          cursor: 'pointer',
+          userSelect: 'none',
+          transition: 'all 120ms',
+          position: 'sticky', top: 0, zIndex: 10,
         }}
-        onMouseEnter={e => filter !== f && (e.currentTarget.style.color = "#666")}
-        onMouseLeave={e => filter !== f && (e.currentTarget.style.color = "#2a2a2a")}
+        onMouseEnter={e => {
+          e.currentTarget.style.background = '#141414';
+          e.currentTarget.style.borderColor = '#333';
+        }}
+        onMouseLeave={e => {
+          e.currentTarget.style.background = collapsed ? '#0c0c0c' : '#111';
+          e.currentTarget.style.borderColor = collapsed ? '#1e1e1e' : '#282828';
+        }}
       >
-        {f}
-        {tabCounts && tabCounts[f] !== undefined && tabCounts[f] > 0 && (
-          <span style={{ marginLeft: "5px", color: filter === f ? "#555" : "#1e1e1e" }}>
-            {tabCounts[f]}
-          </span>
+        {/* Color dot */}
+        <div style={{
+          width: '8px', height: '8px', borderRadius: '50%',
+          background: color, flexShrink: 0,
+          boxShadow: dimmed ? 'none' : `0 0 6px ${color}40`,
+        }} />
+
+        {/* Category name */}
+        <span style={{
+          fontSize: '11px', color: dimmed ? '#555' : '#aaa',
+          letterSpacing: '0.08em', fontWeight: 700,
+        }}>
+          {name}
+        </span>
+
+        {/* Collapsed preview tickers */}
+        {collapsed && previewTickers.length > 0 && (
+          <div style={{ display: 'flex', gap: '5px', marginLeft: '2px' }}>
+            {previewTickers.map(t => (
+              <span key={t} style={{
+                fontSize: '9px', color: '#555',
+                background: '#181818', padding: '2px 7px', borderRadius: '3px',
+                border: '1px solid #222',
+              }}>{t}</span>
+            ))}
+            {sigs.length > 3 && (
+              <span style={{ fontSize: '9px', color: '#444', alignSelf: 'center' }}>+{sigs.length - 3}</span>
+            )}
+          </div>
         )}
-      </button>
-    ))}
 
-    <div style={{ flex: 1 }} />
+        <div style={{ flex: 1 }} />
 
-    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-      <div style={{
-        width: "5px", height: "5px",
-        borderRadius: "50%",
-        background: "#00C805",
-        animation: "pulse-green 2s ease-in-out infinite",
-      }} />
-      <span style={{
-        fontFamily: "'IBM Plex Mono', monospace",
-        fontSize: "10px",
-        color: "#333",
-      }}>
-        LIVE
-      </span>
+        {/* Count badge */}
+        <span style={{
+          fontSize: '10px', fontWeight: 700,
+          color: dimmed ? '#444' : '#888',
+          background: '#181818', padding: '3px 10px', borderRadius: '10px',
+          border: '1px solid #222',
+          minWidth: '24px', textAlign: 'center',
+        }}>
+          {sigs.length}
+        </span>
+
+        {/* Expand/collapse button */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '4px',
+          padding: '3px 8px',
+          background: collapsed ? '#181818' : 'transparent',
+          border: `1px solid ${collapsed ? '#2a2a2a' : '#222'}`,
+          borderRadius: '4px',
+          transition: 'all 120ms',
+        }}>
+          <span style={{
+            fontSize: '9px', color: collapsed ? '#888' : '#555',
+            transform: collapsed ? 'rotate(0)' : 'rotate(90deg)',
+            transition: 'transform 200ms ease', display: 'inline-block',
+          }}>
+            ▸
+          </span>
+          <span style={{
+            fontSize: '8px', color: collapsed ? '#666' : '#444',
+            letterSpacing: '0.06em', fontWeight: 600,
+          }}>
+            {collapsed ? 'SHOW' : 'HIDE'}
+          </span>
+        </div>
+      </div>
+
+      {/* Expanded cards container */}
+      {!collapsed && (
+        <div style={{
+          border: '1px solid #282828',
+          borderTop: 'none',
+          borderRadius: '0 0 6px 6px',
+          background: '#090909',
+          padding: '6px 0',
+          overflow: 'hidden',
+        }}>
+          {sigs.map(signal => (
+            <AlertCard
+              key={signal.id}
+              signal={signal}
+              isWatched={watchlist.includes(signal.ticker)}
+              onToggleWatch={() => onToggleWatch(signal.ticker)}
+              onClick={() => onSelect(signal)}
+              dimmed={dimmed}
+            />
+          ))}
+        </div>
+      )}
     </div>
-  </div>
-);
+  );
+};
+
+// ── FEED HEADER (tabs + category counts integrated) ──
+const FeedHeader = ({ filter, setFilter, count, tabCounts, categorizedSignals }) => {
+  const getCount = (name) => (categorizedSignals || []).find(g => g.name === name)?.signals.length || 0;
+  const catItems = [
+    { label: 'EARNINGS', count: getCount('EARNINGS & FINANCIAL'), color: '#00C805' },
+    { label: 'LEADERSHIP', count: getCount('LEADERSHIP & CORP EVENTS'), color: '#FF6B00' },
+    { label: 'LEGAL', count: getCount('REGULATORY & LEGAL'), color: '#FF3333' },
+    { label: 'ROUTINE', count: getCount('ROUTINE FILINGS'), color: '#555' },
+  ].filter(i => i.count > 0);
+
+  return (
+    <div style={{ flexShrink: 0, background: '#080808', borderBottom: '1px solid #1a1a1a' }}>
+
+      {/* Row 1: Title + Filter tabs + LIVE */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        padding: '10px 16px',
+        gap: '8px',
+      }}>
+        {/* Title */}
+        <span style={{ fontSize: '14px', fontWeight: 700, color: '#fff', letterSpacing: '0.04em', marginRight: '4px' }}>
+          Filings
+        </span>
+        <span style={{ fontSize: '11px', color: '#444', marginRight: '12px' }}>{count}</span>
+
+        {/* Tab buttons */}
+        {['ALL', 'WATCHLIST', 'RISK', 'OPPORTUNITY'].map(f => {
+          const isActive = filter === f;
+          const tabCount = tabCounts && tabCounts[f] > 0 ? tabCounts[f] : null;
+          return (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              style={{
+                padding: '5px 12px',
+                background: isActive ? '#1a1a1a' : 'transparent',
+                border: isActive ? '1px solid #2a2a2a' : '1px solid transparent',
+                borderRadius: '4px',
+                color: isActive ? '#fff' : '#444',
+                fontSize: '10px',
+                letterSpacing: '0.06em',
+                cursor: 'pointer',
+                transition: 'all 120ms',
+                fontFamily: "'JetBrains Mono', monospace",
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+              onMouseEnter={e => {
+                if (!isActive) {
+                  e.currentTarget.style.background = '#111';
+                  e.currentTarget.style.borderColor = '#1e1e1e';
+                  e.currentTarget.style.color = '#888';
+                }
+              }}
+              onMouseLeave={e => {
+                if (!isActive) {
+                  e.currentTarget.style.background = 'transparent';
+                  e.currentTarget.style.borderColor = 'transparent';
+                  e.currentTarget.style.color = '#444';
+                }
+              }}
+            >
+              {f}
+              {tabCount && (
+                <span style={{
+                  fontSize: '9px',
+                  color: isActive ? '#666' : '#333',
+                  background: isActive ? '#222' : '#0e0e0e',
+                  padding: '1px 5px',
+                  borderRadius: '3px',
+                  fontWeight: 600,
+                }}>
+                  {tabCount}
+                </span>
+              )}
+            </button>
+          );
+        })}
+
+        <div style={{ flex: 1 }} />
+
+        {/* LIVE dot */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '6px',
+          padding: '4px 10px',
+          background: '#00C80510',
+          border: '1px solid #00C80520',
+          borderRadius: '4px',
+        }}>
+          <div style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#00C805', animation: 'pulse-green 2s ease-in-out infinite' }} />
+          <span style={{ fontSize: '9px', color: '#00C805', letterSpacing: '0.06em', fontWeight: 600 }}>LIVE</span>
+        </div>
+      </div>
+
+      {/* Row 2: Category breakdown pills */}
+      {catItems.length > 0 && (
+        <div style={{
+          display: 'flex',
+          gap: '6px',
+          padding: '8px 16px 10px',
+          borderTop: '1px solid #111',
+        }}>
+          {catItems.map(({ label, count: c, color }) => (
+            <div key={label} style={{
+              display: 'flex', alignItems: 'center', gap: '7px',
+              padding: '5px 14px',
+              background: '#0e0e0e',
+              border: '1px solid #1a1a1a',
+              borderRadius: '4px',
+            }}>
+              <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: color, flexShrink: 0 }} />
+              <span style={{ fontSize: '9px', color: '#666', letterSpacing: '0.06em' }}>{label}</span>
+              <span style={{ fontSize: '12px', color: '#aaa', fontWeight: 700 }}>{c}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 // === FIX 3: RIGHT PANEL ZONES ===
 
@@ -165,34 +322,28 @@ const EVENT_META = {
 const TodayStats = ({ signals }) => {
   const stats = useMemo(() => ({
     total: signals.length,
-    positive: signals.filter(s => s.classification === "Positive").length,
-    risks: signals.filter(s => s.classification === "Risk").length,
+    positive: signals.filter(s => s.classification === 'Positive').length,
+    risks: signals.filter(s => s.classification === 'Risk').length,
   }), [signals]);
 
   return (
-    <div style={{ padding: "16px", borderBottom: "1px solid #0f0f0f" }}>
-      <div style={{
-        fontSize: "10px",
-        fontFamily: "'IBM Plex Mono', monospace",
-        color: "#333",
-        letterSpacing: "0.1em",
-        marginBottom: "12px",
-      }}>
+    <div style={{ padding: '14px', borderBottom: '1px solid #141414' }}>
+      <div style={{ fontSize: '10px', color: '#555', letterSpacing: '0.1em', marginBottom: '10px', fontWeight: 600 }}>
         TODAY
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "1px", background: "#0d0d0d", marginBottom: "16px" }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
         {[
-          { label: "FILINGS", value: stats.total, color: "#fff" },
-          { label: "POSITIVE", value: stats.positive, color: stats.positive > 0 ? "#00C805" : "#333" },
-          { label: "RISK", value: stats.risks, color: stats.risks > 0 ? "#FF3333" : "#333" },
-        ].map(({ label, value, color }) => (
-          <div key={label} style={{ background: "#080808", padding: "10px 12px" }}>
-            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: "20px", fontWeight: 700, color, lineHeight: 1 }}>
-              {value}
-            </div>
-            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: "9px", color: "#2a2a2a", letterSpacing: "0.1em", marginTop: "4px" }}>
-              {label}
-            </div>
+          { label: 'FILINGS', value: stats.total, color: '#fff', bg: '#0c0c0c' },
+          { label: 'POSITIVE', value: stats.positive, color: stats.positive > 0 ? '#00C805' : '#333', bg: stats.positive > 0 ? '#00C80508' : '#0c0c0c' },
+          { label: 'RISK', value: stats.risks, color: stats.risks > 0 ? '#FF3333' : '#333', bg: stats.risks > 0 ? '#FF333308' : '#0c0c0c' },
+        ].map(({ label, value, color, bg }) => (
+          <div key={label} style={{
+            background: bg, padding: '10px 10px',
+            border: '1px solid #1a1a1a', borderRadius: '4px',
+            textAlign: 'center',
+          }}>
+            <div style={{ fontSize: '20px', fontWeight: 700, color, lineHeight: 1 }}>{value}</div>
+            <div style={{ fontSize: '8px', color: '#444', letterSpacing: '0.1em', marginTop: '5px' }}>{label}</div>
           </div>
         ))}
       </div>
@@ -202,128 +353,101 @@ const TodayStats = ({ signals }) => {
 
 const TopSignals = ({ signals, watchlist = [] }) => {
   const topSignals = useMemo(() => {
-    // Watchlist signals first (always show regardless of score)
     const watchlistSignals = signals
       .filter(s => watchlist.includes(s.ticker))
       .sort((a, b) => (b.impact_score || 0) - (a.impact_score || 0));
-
-    // Then top non-watchlist signals by impact
     const watchlistTickers = new Set(watchlistSignals.map(s => s.ticker));
     const otherSignals = signals
-      .filter(s => !watchlistTickers.has(s.ticker) && (s.classification !== "Neutral" || (s.impact_score || 0) >= 55))
+      .filter(s => !watchlistTickers.has(s.ticker) && (s.classification !== 'Neutral' || (s.impact_score || 0) >= 55))
       .sort((a, b) => (b.impact_score || 0) - (a.impact_score || 0));
-
-    // Combine: all watchlist + fill up to 5 with others
     return [...watchlistSignals, ...otherSignals].slice(0, 5);
   }, [signals, watchlist]);
 
   return (
-    <div style={{ padding: "16px", borderBottom: "1px solid #0f0f0f" }}>
-      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: "9px", color: "#333", letterSpacing: "0.1em", marginBottom: "8px" }}>
+    <div style={{ padding: '14px', borderBottom: '1px solid #141414' }}>
+      <div style={{ fontSize: '10px', color: '#555', letterSpacing: '0.1em', marginBottom: '10px', fontWeight: 600 }}>
         TOP SIGNALS
       </div>
       {topSignals.length === 0 ? (
-        <p style={{ fontSize: "11px", color: "#1a1a1a", fontFamily: "'IBM Plex Mono', monospace", margin: 0 }}>
-          No notable signals yet
-        </p>
-      ) : topSignals.map(s => (
-        <div key={s.id} style={{
-          display: "flex", justifyContent: "space-between", alignItems: "center",
-          padding: "6px 0", borderBottom: "1px solid #0d0d0d",
-        }}>
-          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-            {watchlist.includes(s.ticker) && (
-              <div style={{ width: "4px", height: "4px", borderRadius: "50%", background: "#0066FF", flexShrink: 0 }} />
-            )}
-            <span style={{
-              fontFamily: "'IBM Plex Mono', monospace", fontSize: "12px", fontWeight: 700,
-              color: s.classification === "Positive" ? "#00C805" : s.classification === "Risk" ? "#FF3333" : "#aaa",
-            }}>
-              {s.ticker}
-            </span>
-            <span style={{ fontSize: "10px", color: "#2a2a2a", fontFamily: "'IBM Plex Mono', monospace" }}>
-              {(EVENT_META[s.event_type] || { label: "8-K" }).label}
+        <p style={{ fontSize: '11px', color: '#333', margin: 0 }}>No notable signals yet</p>
+      ) : topSignals.map((s, i) => {
+        const sColor = s.classification === 'Positive' ? '#00C805' : s.classification === 'Risk' ? '#FF3333' : '#888';
+        const impactColor = (s.impact_score || 0) >= 70 ? '#FF3333' : (s.impact_score || 0) >= 50 ? '#FFB300' : '#444';
+        return (
+          <div key={s.id} style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            padding: '7px 8px', marginBottom: '3px',
+            background: '#0c0c0c', border: '1px solid #141414', borderRadius: '4px',
+            borderLeft: `3px solid ${sColor}`,
+          }}>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', minWidth: 0 }}>
+              {watchlist.includes(s.ticker) && (
+                <div style={{ width: '4px', height: '4px', borderRadius: '50%', background: '#0066FF', flexShrink: 0 }} />
+              )}
+              <span style={{ fontSize: '12px', fontWeight: 700, color: sColor }}>{s.ticker}</span>
+              <span style={{ fontSize: '10px', color: '#333', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {(EVENT_META[s.event_type] || { label: '8-K' }).label}
+              </span>
+            </div>
+            <span style={{ fontSize: '11px', color: impactColor, fontWeight: 600, flexShrink: 0, marginLeft: '8px' }}>
+              {s.impact_score || 0}
             </span>
           </div>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: "11px", color: "#333" }}>
-            {s.impact_score || 0}
-          </span>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 };
 
 const MarketBrief = ({ brief, isGenerating, briefAge }) => {
   return (
-    <div style={{ padding: "16px", borderBottom: "1px solid #0f0f0f" }}>
-      <div style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        marginBottom: "12px",
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+    <div style={{ padding: '14px', borderBottom: '1px solid #141414' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <div style={{
-            width: "5px", height: "5px",
-            borderRadius: "50%",
-            background: isGenerating ? "#FFB300" : "#0066FF",
-            animation: isGenerating ? "pulse 1s ease infinite" : "none",
+            width: '5px', height: '5px', borderRadius: '50%',
+            background: isGenerating ? '#FFB300' : '#0066FF',
+            animation: isGenerating ? 'pulse 1s ease infinite' : 'none',
           }} />
-          <span style={{
-            fontSize: "10px",
-            fontFamily: "'IBM Plex Mono', monospace",
-            color: "#444",
-            letterSpacing: "0.1em",
-            textTransform: "uppercase",
-          }}>
-            Market Brief
-          </span>
+          <span style={{ fontSize: '10px', color: '#555', letterSpacing: '0.1em', fontWeight: 600 }}>MARKET BRIEF</span>
         </div>
         {briefAge > 0 && (
-          <span style={{
-            fontSize: "10px",
-            fontFamily: "'IBM Plex Mono', monospace",
-            color: "#222",
-          }}>
+          <span style={{ fontSize: '9px', color: '#333' }}>
             {briefAge < 60 ? `${briefAge}s ago` : `${Math.floor(briefAge / 60)}m ago`}
           </span>
         )}
       </div>
 
       {isGenerating && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "7px" }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
           {[100, 80, 55].map((w, i) => (
-            <div key={i} style={{
-              height: "8px", width: `${w}%`, background: "#111",
-              animation: `shimmer 1.5s ${i * 0.15}s ease infinite`,
-            }} />
+            <div key={i} style={{ height: '8px', width: `${w}%`, background: '#111', borderRadius: '2px', animation: `shimmer 1.5s ${i * 0.15}s ease infinite` }} />
           ))}
         </div>
       )}
 
-      {/* Brief content — split into sentences: */}
       {!isGenerating && brief && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "9px" }}>
-          {brief.split(/(?<=[.!?])\s+/).slice(0, 3).map((sentence, i) => (
-            <p key={i} style={{
-              margin: 0,
-              fontSize: i === 0 ? "12px" : "11px",
-              color: i === 0 ? "#777" : "#333",
-              lineHeight: 1.6,
-              borderLeft: i === 0 ? "2px solid #0066FF35" : "none",
-              paddingLeft: i === 0 ? "8px" : "0",
-            }}>
-              {sentence}
-            </p>
-          ))}
+        <div style={{
+          background: '#0a0a0a', border: '1px solid #141414', borderRadius: '4px',
+          padding: '12px', borderLeft: '3px solid #0066FF30',
+        }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {brief.split(/(?<=[.!?])\s+/).slice(0, 3).map((sentence, i) => (
+              <p key={i} style={{
+                margin: 0,
+                fontSize: i === 0 ? '12px' : '11px',
+                color: i === 0 ? '#888' : '#444',
+                lineHeight: 1.55,
+              }}>
+                {sentence}
+              </p>
+            ))}
+          </div>
         </div>
       )}
 
       {!isGenerating && !brief && (
-        <p style={{ fontSize: "11px", color: "#1a1a1a", margin: 0, fontFamily: "'IBM Plex Mono', monospace" }}>
-          Awaiting signals...
-        </p>
+        <p style={{ fontSize: '11px', color: '#333', margin: 0 }}>Awaiting signals...</p>
       )}
     </div>
   );
@@ -367,28 +491,10 @@ const WatchlistZone = ({ watchlist, signals, onAdd, onRemove }) => {
   };
 
   return (
-    <div style={{ padding: "16px", flex: 1 }}>
-      <div style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        marginBottom: "10px",
-      }}>
-        <span style={{
-          fontSize: "10px",
-          fontFamily: "'IBM Plex Mono', monospace",
-          color: "#333",
-          letterSpacing: "0.1em",
-        }}>
-          WATCHLIST
-        </span>
-        <span style={{
-          fontSize: "10px",
-          fontFamily: "'IBM Plex Mono', monospace",
-          color: "#222",
-        }}>
-          {watchlist.length}/10
-        </span>
+    <div style={{ padding: '14px', flex: 1 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+        <span style={{ fontSize: '10px', color: '#555', letterSpacing: '0.1em', fontWeight: 600 }}>WATCHLIST</span>
+        <span style={{ fontSize: '10px', color: '#444' }}>{watchlist.length}/10</span>
       </div>
 
       <div style={{ position: "relative", marginBottom: "8px" }}>
@@ -575,6 +681,7 @@ const saveWatchlistCache = (tickers) => {
 
 export default function Dashboard() {
   const { user, authHeaders, logout } = useAuth();
+  const navigate = useNavigate();
   // FIX 3 & 9: Init from cache instantly
   const [allSignals, setAllSignals] = useState(() => loadCache(SIGNAL_CACHE_KEY, SIGNAL_CACHE_TTL) || []);
   const [watchlist, setWatchlist] = useState(() => loadWatchlistCache());
@@ -590,19 +697,7 @@ export default function Dashboard() {
     typeof Notification !== "undefined" && Notification.permission === "default"
   );
 
-  // Health check — debounced
-  const [backendOnline, setBackendOnline] = useState(null);
-  const [consecutiveFailures, setConsecutiveFailures] = useState(0);
-  const offlineTimerRef = useRef(null);
-
-  // Agent status
-  const [agentStatus, setAgentStatus] = useState({
-    agent_status: 'not_initialized',
-    last_poll_time: null,
-    filings_processed_today: 0,
-    next_poll_seconds: null,
-    poll_interval: 120,
-  });
+  // Health check + agent status handled by AppShell
 
   // AI Brief
   const [brief, setBrief] = useState(() => {
@@ -629,29 +724,7 @@ export default function Dashboard() {
     impact_score: row.impact_score || null,
   }), []);
 
-  // Check health
-  const checkHealth = useCallback(async () => {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 4000);
-      const res = await fetch(`${API}/health`, { signal: controller.signal });
-      clearTimeout(timeout);
-      if (res.ok) {
-        if (offlineTimerRef.current) { clearTimeout(offlineTimerRef.current); offlineTimerRef.current = null; }
-        setBackendOnline(true);
-        setConsecutiveFailures(0);
-      }
-    } catch {
-      setConsecutiveFailures(prev => prev + 1);
-      if (!offlineTimerRef.current) {
-        offlineTimerRef.current = setTimeout(() => { setBackendOnline(false); offlineTimerRef.current = null; }, 15000);
-      }
-    }
-  }, []);
-
-  const fetchAgentStatus = useCallback(async () => {
-    try { const res = await axios.get(`${API}/edgar/status`); setAgentStatus(res.data); } catch { }
-  }, []);
+  // Check health + agent status now in AppShell
 
   // FIX 4: Brief with cache
   const fetchBrief = useCallback(async (force = false) => {
@@ -677,10 +750,9 @@ export default function Dashboard() {
 
     const load = async () => {
       // Fire everything in parallel
-      const [sigResult, wlResult, healthResult] = await Promise.allSettled([
+      const [sigResult, wlResult] = await Promise.allSettled([
         axios.get(`${API}/signals?limit=50`, { headers: authHeaders() }),
         axios.get(`${API}/watchlist`, { headers: authHeaders() }),
-        (async () => { await checkHealth(); await fetchAgentStatus(); })(),
       ]);
 
       if (sigResult.status === "fulfilled") {
@@ -704,11 +776,8 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
-  // Polling intervals — reduced frequency
+  // Signal polling (health + agent check handled by AppShell)
   useEffect(() => {
-    const healthInterval = setInterval(checkHealth, 30000);
-    const agentInterval = setInterval(fetchAgentStatus, 20000);
-    // Signals poll less aggressively since we have realtime
     const signalInterval = setInterval(async () => {
       try {
         const res = await axios.get(`${API}/signals?limit=50`, { headers: authHeaders() });
@@ -718,12 +787,7 @@ export default function Dashboard() {
       } catch { }
     }, 45000);
 
-    return () => {
-      clearInterval(healthInterval);
-      clearInterval(agentInterval);
-      clearInterval(signalInterval);
-      if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
-    };
+    return () => clearInterval(signalInterval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -855,146 +919,176 @@ export default function Dashboard() {
   }, [allSignals]);
 
   const filteredSignals = useMemo(() => {
+    // Step 1: Apply tab filter
+    let filtered;
     switch (feedFilter) {
-      case "WATCHLIST": return cleanSignals.filter(s => watchlist.includes(s.ticker));
-      case "RISK": return cleanSignals.filter(s => s.classification === "Risk");
-      case "OPPORTUNITY": return cleanSignals.filter(s => s.classification === "Positive");
-      default: return cleanSignals;
+      case 'WATCHLIST': filtered = cleanSignals.filter(s => watchlist.includes(s.ticker)); break;
+      case 'RISK': filtered = cleanSignals.filter(s => s.classification === 'Risk'); break;
+      case 'OPPORTUNITY': filtered = cleanSignals.filter(s => s.classification === 'Positive'); break;
+      default: filtered = cleanSignals;
     }
+
+    // Step 2: Sort — watched first, then signal type, then impact, then date
+    return filtered.sort((a, b) => {
+      const aWatched = watchlist.includes(a.ticker) ? 1 : 0;
+      const bWatched = watchlist.includes(b.ticker) ? 1 : 0;
+      if (bWatched !== aWatched) return bWatched - aWatched;
+
+      const sigRank = { Positive: 3, Risk: 2, Neutral: 1 };
+      const aSig = sigRank[a.classification] || 0;
+      const bSig = sigRank[b.classification] || 0;
+      if (bSig !== aSig) return bSig - aSig;
+
+      const aImpact = a.impact_score || 0;
+      const bImpact = b.impact_score || 0;
+      if (bImpact !== aImpact) return bImpact - aImpact;
+
+      return new Date(b.filed_at) - new Date(a.filed_at);
+    });
   }, [cleanSignals, watchlist, feedFilter]);
 
   const tabCounts = useMemo(() => ({
     WATCHLIST: cleanSignals.filter(s => watchlist.includes(s.ticker)).length,
-    RISK: cleanSignals.filter(s => s.classification === "Risk").length,
-    OPPORTUNITY: cleanSignals.filter(s => s.classification === "Positive").length,
+    RISK: cleanSignals.filter(s => s.classification === 'Risk').length,
+    OPPORTUNITY: cleanSignals.filter(s => s.classification === 'Positive').length,
   }), [cleanSignals, watchlist]);
+
+  // Categorize signals by event type
+  const categorizedSignals = useMemo(() => {
+    const groups = {};
+    filteredSignals.forEach(signal => {
+      const cat = getCategory(signal);
+      if (!groups[cat.group]) {
+        groups[cat.group] = { signals: [], priority: cat.priority };
+      }
+      groups[cat.group].signals.push(signal);
+    });
+
+    // Sort within each group: watched first, then impact
+    Object.values(groups).forEach(g => {
+      g.signals.sort((a, b) => {
+        const aW = watchlist.includes(a.ticker) ? 1 : 0;
+        const bW = watchlist.includes(b.ticker) ? 1 : 0;
+        if (bW !== aW) return bW - aW;
+        return (b.impact_score || 0) - (a.impact_score || 0);
+      });
+    });
+
+    return Object.entries(groups)
+      .sort(([, a], [, b]) => a.priority - b.priority)
+      .map(([name, data]) => ({ name, ...data }));
+  }, [filteredSignals, watchlist]);
 
   const displayedSignals = filteredSignals;
 
   return (
-    <div style={{
-      display: "grid",
-      gridTemplateColumns: "160px 1fr 280px",
-      gridTemplateRows: "40px 1fr",
-      height: "100vh",
-      overflow: "hidden",
-      background: "#030303",
-    }}>
-
-      {/* TOP STATUS BAR */}
-      <div style={{ gridColumn: "1 / -1", gridRow: "1", zIndex: 10 }}>
-        <StatusBar
-          agentStatus={agentStatus.agent_status}
-          isOnline={backendOnline !== false || consecutiveFailures < 3}
-          filedToday={agentStatus.filings_processed_today}
-        />
-      </div>
-
-      {/* LEFT NAV */}
-      <div style={{ gridRow: "2", borderRight: "1px solid #0d0d0d", overflow: "hidden" }}>
-        <DashboardSidebar user={user} onLogout={logout} />
-      </div>
-
-      {/* CENTER FEED */}
-      <div style={{ gridRow: "2", overflow: "hidden", display: "flex", flexDirection: "column" }}>
-        <FeedHeader filter={feedFilter} setFilter={setFeedFilter} count={displayedSignals.length} tabCounts={tabCounts} />
-
-        {/* Notification permission prompt */}
-        {showNotifPrompt && (
-          <div style={{
-            background: "#0066FF0a",
-            border: "1px solid #0066FF20",
-            borderLeft: "2px solid #0066FF",
-            padding: "10px 16px",
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            flexShrink: 0,
-          }}>
-            <span style={{ fontSize: "11px", color: "#555", fontFamily: "'IBM Plex Mono', monospace" }}>
-              Enable notifications to get alerts when filings arrive
-            </span>
-            <div style={{ display: "flex", gap: "8px" }}>
-              <button
-                onClick={async () => { await requestPermission(); setShowNotifPrompt(false); }}
-                style={{
-                  padding: "4px 10px", background: "#0066FF", border: "none",
-                  color: "#fff", fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: "10px", letterSpacing: "0.06em", cursor: "pointer",
-                }}
-              >
-                ENABLE
-              </button>
-              <button
-                onClick={() => setShowNotifPrompt(false)}
-                style={{ background: "none", border: "none", color: "#333", cursor: "pointer", fontSize: "16px" }}
-              >
-                ×
-              </button>
-            </div>
-          </div>
-        )}
-
-
-        {/* FIX 2: Skeleton → Empty → Feed */}
-        <div style={{ flex: 1, overflowY: "auto", padding: "0" }} data-testid="signals-feed">
-          {signalsLoading ? (
-            <SignalSkeleton count={8} />
-          ) : displayedSignals.length === 0 ? (
-            <div style={{ padding: "40px 20px", textAlign: "center" }}>
-              {allSignals.length === 0 ? (
-                <>
-                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: "11px", color: "#2a2a2a", marginBottom: "16px", letterSpacing: "0.08em" }}>
-                    NO SIGNALS YET
-                  </div>
-                  <p style={{ fontSize: "12px", color: "#222", marginBottom: "16px" }}>
-                    Agent is monitoring EDGAR. First signals will appear shortly.
-                  </p>
-                </>
-              ) : (
-                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: "11px", color: "#2a2a2a", letterSpacing: "0.08em" }}>
-                  NO SIGNALS MATCH FILTER
-                </div>
-              )}
-            </div>
-          ) : (
-            displayedSignals.map(signal => (
-              <AlertCard
-                key={signal.id}
-                signal={signal}
-                onClick={setSelectedSignal}
-                isNew={newSignalIds.has(signal.id)}
-                isWatched={watchlist.includes(signal.ticker)}
-                onToggleWatch={toggleWatch}
-              />
-            ))
-          )}
-        </div>
-      </div>
-
-      {/* RIGHT PANEL */}
+    <AppShell>
       <div style={{
-        gridRow: "2",
-        borderLeft: "1px solid #0d0d0d",
-        display: "flex",
-        flexDirection: "column",
-        background: "#030303",
-        overflowY: "auto",
+        display: 'grid',
+        gridTemplateColumns: '1fr 260px',
+        height: '100%',
+        overflow: 'hidden',
       }}>
-        {/* FIX 8: Right panel skeletons */}
-        {signalsLoading ? <StatsSkeleton /> : <TodayStats signals={displayedSignals} />}
-        <TopSignals signals={cleanSignals} watchlist={watchlist} />
-        <MarketBrief brief={brief} isGenerating={briefLoading} briefAge={briefAge} />
-        {watchlistLoading ? <WatchlistSkeleton /> : <WatchlistZone watchlist={watchlist} signals={allSignals} onAdd={addTicker} onRemove={removeTicker} />}
-      </div>
 
-      {/* MODAL */}
-      {selectedSignal && (
-        <SignalDetailModal
-          signal={selectedSignal}
-          onClose={() => setSelectedSignal(null)}
-        />
-      )}
-    </div>
+        {/* CENTER FEED */}
+        <div style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column', borderRight: '1px solid #0a0a0a' }}>
+          <FeedHeader filter={feedFilter} setFilter={setFeedFilter} count={displayedSignals.length} tabCounts={tabCounts} categorizedSignals={categorizedSignals} />
+
+          {/* Notification permission prompt */}
+          {showNotifPrompt && (
+            <div style={{
+              background: '#0066FF0a',
+              border: '1px solid #0066FF20',
+              borderLeft: '2px solid #0066FF',
+              padding: '10px 16px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexShrink: 0,
+            }}>
+              <span style={{ fontSize: '11px', color: '#555' }}>
+                Enable notifications to get alerts when filings arrive
+              </span>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  onClick={async () => { await requestPermission(); setShowNotifPrompt(false); }}
+                  style={{
+                    padding: '4px 10px', background: '#0066FF', border: 'none',
+                    color: '#fff', fontSize: '10px', letterSpacing: '0.06em', cursor: 'pointer',
+                    fontFamily: "'JetBrains Mono', monospace",
+                  }}
+                >
+                  ENABLE
+                </button>
+                <button
+                  onClick={() => setShowNotifPrompt(false)}
+                  style={{ background: 'none', border: 'none', color: '#333', cursor: 'pointer', fontSize: '16px' }}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Feed — categorized sections */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '0' }} data-testid="signals-feed">
+            {signalsLoading ? (
+              <SignalSkeleton count={8} />
+            ) : displayedSignals.length === 0 ? (
+              <div style={{ padding: '40px 20px', textAlign: 'center' }}>
+                {allSignals.length === 0 ? (
+                  <>
+                    <div style={{ fontSize: '11px', color: '#2a2a2a', marginBottom: '16px', letterSpacing: '0.08em' }}>
+                      NO SIGNALS YET
+                    </div>
+                    <p style={{ fontSize: '12px', color: '#222', marginBottom: '16px' }}>
+                      Agent is monitoring EDGAR. First signals will appear shortly.
+                    </p>
+                  </>
+                ) : (
+                  <div style={{ fontSize: '11px', color: '#2a2a2a', letterSpacing: '0.08em' }}>
+                    NO SIGNALS MATCH FILTER
+                  </div>
+                )}
+              </div>
+            ) : (
+              categorizedSignals.map(({ name, signals: sigs, priority }) => (
+                <CategorySection
+                  key={name}
+                  name={name}
+                  signals={sigs}
+                  watchlist={watchlist}
+                  onToggleWatch={toggleWatch}
+                  onSelect={(sig) => navigate(`/signal/${sig.id}`)}
+                  color={GROUP_COLORS[name]}
+                  dimmed={priority === 4}
+                />
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* RIGHT PANEL */}
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          background: '#050505',
+          overflowY: 'auto',
+        }}>
+          {signalsLoading ? <StatsSkeleton /> : <TodayStats signals={displayedSignals} />}
+          <TopSignals signals={cleanSignals} watchlist={watchlist} />
+          <MarketBrief brief={brief} isGenerating={briefLoading} briefAge={briefAge} />
+          {watchlistLoading ? <WatchlistSkeleton /> : <WatchlistZone watchlist={watchlist} signals={allSignals} onAdd={addTicker} onRemove={removeTicker} />}
+        </div>
+
+        {/* MODAL (fallback for in-session viewing) */}
+        {selectedSignal && (
+          <SignalDetailModal
+            signal={selectedSignal}
+            onClose={() => setSelectedSignal(null)}
+          />
+        )}
+      </div>
+    </AppShell>
   );
 }

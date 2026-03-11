@@ -173,8 +173,20 @@ async def get_signals(tickers: Optional[str] = None, limit: int = 50, offset: in
         signals = [format_signal_for_api(row) for row in (result.data or [])]
         return {"signals": signals, "total": len(signals)}
     except Exception as e:
-        logger.error(f"Failed to fetch signals: {e}")
-        return {"signals": [], "total": 0, "error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.get("/signals/{signal_id}")
+async def get_signal(signal_id: str):
+    """Get a single signal by ID."""
+    try:
+        result = supabase.table("signals").select("*").eq("id", signal_id).single().execute()
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Signal not found")
+        return format_signal_for_api(result.data)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @api_router.post("/signals/{signal_id}/correct")
 async def correct_signal(signal_id: str, data: SignalCorrection):
