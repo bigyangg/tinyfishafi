@@ -159,6 +159,44 @@ class EdgarAgent:
             self._thread.join(timeout=10)
         logger.info("EDGAR polling agent stopped")
 
+    def fetch_company_latest(self, ticker: str):
+        """Manually fetch and process the latest 8-K for a specific ticker/CIK."""
+        try:
+            url = f"https://www.sec.gov/cgi-bin/browse-edgar"
+            with httpx.Client(timeout=30, headers={"User-Agent": EDGAR_USER_AGENT}, follow_redirects=True) as client:
+                response = client.get(
+                    url,
+                    params={
+                        "action": "getcompany",
+                        "CIK": ticker,
+                        "type": "8-K",
+                        "dateb": "",
+                        "owner": "include",
+                        "count": "5",
+                        "output": "atom",
+                    }
+                )
+                if response.status_code == 200:
+                    entries = re.findall(r'<accession-number>(.*?)</accession-number>', response.text)
+                    company_names = re.findall(r'<company-name>(.*?)</company-name>', response.text)
+                    ciks = re.findall(r'<cik>(.*?)</cik>', response.text)
+                    if entries:
+                        filing_data = {
+                            "accession_no": entries[0],
+                            "entity_name": company_names[0] if company_names else "Unknown",
+                            "entity_id": ciks[0] if ciks else "",
+                            "file_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                        }
+                        # Ensure pipeline is initialized so we can process
+                        self._init_pipeline()
+                        self._process_filing(filing_data)
+                        return {"status": "success", "message": f"Fetched latest 8-K for {ticker}"}
+                    return {"status": "not_found", "message": f"No recent 8-K found for {ticker}"}
+                return {"status": "error", "message": f"SEC EDGAR returned HTTP {response.status_code}"}
+        except Exception as e:
+            logger.error(f"[MANUAL] Error fetching {ticker}: {e}")
+            return {"status": "error", "message": str(e)}
+
     def _poll_loop(self):
         """Main polling loop — runs every 2 minutes."""
         while not self._stop_event.is_set():
@@ -408,23 +446,32 @@ class EdgarAgent:
                     logger.error(f"[STORE] Failed to store signal (continuing): {e}")
                     return
                 
-                # Send Telegram alert — ONLY if impact score meets configurable threshold
+                # Send Telegram alert — uses smart threshold logic (watchlist, confidence, impact)
                 if signal.signal != "Pending" and self.telegram_enabled:
-                    impact = signal.impact_score or 0
-                    if impact >= TELEGRAM_IMPACT_THRESHOLD:
+                    try:
+                        from telegram_bot import should_send_telegram, send_signal_alert
+                        alert_data = signal_row.copy()
+                        if signal.impact_score is not None:
+                            alert_data["impact_score"] = signal.impact_score
+                        if signal.event_type is not None:
+                            alert_data["event_type"] = signal.event_type
+
+                        # Load global watchlist for alert decisions
+                        watched_tickers = []
                         try:
-                            from telegram_bot import send_signal_alert
-                            alert_data = signal_row.copy()
-                            if signal.impact_score is not None:
-                                alert_data["impact_score"] = signal.impact_score
-                            if signal.event_type is not None:
-                                alert_data["event_type"] = signal.event_type
-                            send_signal_alert(alert_data)
-                            logger.info(f"[TELEGRAM] Alert sent for {signal.ticker} (impact={impact})")
-                        except Exception as e:
-                            logger.error(f"[TELEGRAM] Alert failed (non-fatal): {e}")
-                    else:
-                        logger.info(f"[TELEGRAM] Skipped {signal.ticker} — impact {impact} < threshold {TELEGRAM_IMPACT_THRESHOLD}")
+                            wl_result = self.supabase.table("watchlist").select("ticker").execute()
+                            watched_tickers = list(set(w["ticker"] for w in (wl_result.data or [])))
+                        except Exception:
+                            pass
+
+                        if should_send_telegram(alert_data, watched_tickers):
+                            is_watched = signal.ticker in watched_tickers
+                            send_signal_alert(alert_data, is_watched=is_watched)
+                            logger.info(f"[TELEGRAM] Alert sent for {signal.ticker} (impact={signal.impact_score}, watched={is_watched})")
+                        else:
+                            logger.info(f"[TELEGRAM] Skipped {signal.ticker} — did not meet smart threshold")
+                    except Exception as e:
+                        logger.error(f"[TELEGRAM] Alert failed (non-fatal): {e}")
         else:
             # Fallback: direct classification (legacy path)
             self._process_filing_legacy(filing_data, filing_text, company_name, accession_number, filed_at)

@@ -1,14 +1,9 @@
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, DollarSign, LogOut, Send } from 'lucide-react';
+import { LayoutDashboard, LogOut, Send } from 'lucide-react';
 import axios from 'axios';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
-
-const NAV_ITEMS = [
-  { icon: LayoutDashboard, label: 'Dashboard', path: '/dashboard' },
-  { icon: DollarSign, label: 'Pricing', path: '/pricing' },
-];
 
 export default function DashboardSidebar({ user, onLogout }) {
   const location = useLocation();
@@ -30,72 +25,127 @@ export default function DashboardSidebar({ user, onLogout }) {
   };
 
   return (
-    <aside className="w-[200px] shrink-0 border-r border-zinc-800 bg-[#050505] flex flex-col h-screen sticky top-0" data-testid="dashboard-sidebar">
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
+        background: "#050505",
+      }}
+      data-testid="dashboard-sidebar"
+    >
       {/* Logo */}
-      <div className="border-b border-zinc-800 px-5 py-4">
-        <span className="font-mono font-bold text-base text-white tracking-wider" data-testid="sidebar-logo">AFI</span>
-        <div className="text-[9px] font-mono text-zinc-600 uppercase tracking-widest mt-0.5">Filing Intelligence</div>
+      <div style={{ padding: "20px 16px 16px", borderBottom: "1px solid #0d0d0d" }}>
+        <div style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontWeight: 700, fontSize: "16px", color: "#fff",
+          letterSpacing: "0.06em"
+        }}>
+          AFI
+        </div>
+        <div style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: "9px", color: "#333",
+          letterSpacing: "0.12em", marginTop: "2px"
+        }}>
+          FILING INTELLIGENCE
+        </div>
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 px-3 py-4 space-y-0.5" data-testid="sidebar-nav">
-        {NAV_ITEMS.map(item => {
-          const Icon = item.icon;
-          const isActive = location.pathname === item.path;
-          return (
-            <Link
-              key={item.path}
-              to={item.path}
-              className={`flex items-center gap-2.5 px-3 py-2 text-sm transition-colors duration-75 ${isActive
-                  ? 'bg-zinc-900 text-white border-l-2 border-[#0066FF]'
-                  : 'text-zinc-500 hover:text-white hover:bg-zinc-900'
-                }`}
-              data-testid={`sidebar-nav-${item.label.toLowerCase()}`}
-            >
-              <Icon size={14} />
-              {item.label}
-            </Link>
-          );
-        })}
+      <nav style={{ padding: "12px 8px", flex: 1 }}>
+        <Link
+          to="/dashboard"
+          style={{
+            display: "flex", alignItems: "center", gap: "10px",
+            padding: "8px 10px", textDecoration: "none",
+            background: location.pathname === "/dashboard" ? "#0a0a0a" : "transparent",
+            borderLeft: location.pathname === "/dashboard" ? "2px solid #0066FF" : "2px solid transparent",
+            color: location.pathname === "/dashboard" ? "#fff" : "#555",
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: "12px", letterSpacing: "0.04em",
+            transition: "all 100ms",
+          }}
+          data-testid="sidebar-nav-dashboard"
+        >
+          <LayoutDashboard size={14} />
+          Dashboard
+        </Link>
       </nav>
 
-      {/* User area */}
-      <div className="border-t border-zinc-800 px-4 py-4" data-testid="sidebar-user-area">
-        <div className="text-[10px] uppercase tracking-widest text-zinc-600 font-semibold mb-2">Account</div>
-        <div className="text-xs text-zinc-400 truncate mb-3 font-mono" data-testid="sidebar-user-email">
-          {user?.email}
-        </div>
-        <div className="inline-flex items-center border border-zinc-800 px-2 py-0.5 mb-3">
-          <span className="text-[9px] font-mono uppercase tracking-widest text-zinc-500">{user?.tier || 'RETAIL'}</span>
+      {/* Bottom — account + actions */}
+      <div style={{ borderTop: "1px solid #0d0d0d", padding: "12px" }}>
+        {/* Account */}
+        <div style={{ marginBottom: "12px" }}>
+          <div style={{
+            fontSize: "10px", color: "#333",
+            fontFamily: "'IBM Plex Mono', monospace",
+            letterSpacing: "0.08em", marginBottom: "4px"
+          }}>
+            ACCOUNT
+          </div>
+          <div style={{
+            fontSize: "11px", color: "#555",
+            fontFamily: "'IBM Plex Mono', monospace",
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+            marginBottom: "6px",
+          }}>
+            {user?.email || "—"}
+          </div>
+          <div style={{
+            display: "inline-block",
+            fontSize: "9px", padding: "2px 6px",
+            background: "#0d0d0d", border: "1px solid #1a1a1a",
+            color: "#444",
+            fontFamily: "'IBM Plex Mono', monospace",
+            letterSpacing: "0.08em",
+          }}>
+            {(user?.tier || "RETAIL").toUpperCase()}
+          </div>
         </div>
 
-        {/* Test Telegram button */}
+        {/* Test Telegram */}
         <button
           onClick={testTelegram}
           disabled={telegramLoading}
-          className={`flex items-center gap-2 text-xs w-full mb-3 px-2 py-1.5 border transition-colors duration-75 ${telegramStatus === 'sent'
-              ? 'border-[#00C805]/30 text-[#00C805] bg-[#00C805]/5'
-              : telegramStatus === 'failed'
-                ? 'border-[#FF3333]/30 text-[#FF3333] bg-[#FF3333]/5'
-                : 'border-zinc-800 text-zinc-500 hover:text-white hover:border-zinc-600'
-            }`}
+          style={{
+            width: "100%", padding: "7px 10px",
+            background: "transparent",
+            border: `1px solid ${telegramStatus === 'sent' ? '#00C80540' : telegramStatus === 'failed' ? '#FF333340' : '#1a1a1a'}`,
+            color: telegramStatus === 'sent' ? '#00C805' : telegramStatus === 'failed' ? '#FF3333' : '#333',
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: "10px", letterSpacing: "0.06em",
+            cursor: "pointer", textAlign: "left",
+            marginBottom: "6px",
+            transition: "border-color 150ms, color 150ms",
+          }}
+          onMouseEnter={e => { if (!telegramStatus) { e.currentTarget.style.borderColor = "#333"; e.currentTarget.style.color = "#888"; } }}
+          onMouseLeave={e => { if (!telegramStatus) { e.currentTarget.style.borderColor = "#1a1a1a"; e.currentTarget.style.color = "#333"; } }}
           data-testid="telegram-test-button"
         >
-          <Send size={11} />
-          <span className="font-mono text-[10px] uppercase tracking-wider">
-            {telegramLoading ? 'Sending...' : telegramStatus === 'sent' ? 'Sent' : telegramStatus === 'failed' ? 'Failed' : 'Test Telegram'}
-          </span>
+          {telegramLoading ? '··· SENDING' : telegramStatus === 'sent' ? '✓ SENT' : telegramStatus === 'failed' ? '✗ FAILED' : '✈ TEST TELEGRAM'}
         </button>
 
+        {/* Sign Out */}
         <button
           onClick={onLogout}
-          className="flex items-center gap-2 text-xs text-zinc-600 hover:text-white transition-colors duration-75 w-full"
+          style={{
+            width: "100%", padding: "7px 10px",
+            background: "transparent",
+            border: "1px solid #1a1a1a",
+            color: "#333",
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: "10px", letterSpacing: "0.06em",
+            cursor: "pointer", textAlign: "left",
+            transition: "border-color 150ms, color 150ms",
+          }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = "#FF333340"; e.currentTarget.style.color = "#FF3333"; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = "#1a1a1a"; e.currentTarget.style.color = "#333"; }}
           data-testid="sidebar-logout"
         >
-          <LogOut size={12} />
-          Sign out
+          → SIGN OUT
         </button>
       </div>
-    </aside>
+    </div>
   );
 }

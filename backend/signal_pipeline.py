@@ -13,6 +13,24 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+JUNK_PATTERNS = [
+    "no matching ticker",
+    "not an 8-k filing",
+    "no filing content was found",
+    "system message",
+    "cannot analyze",
+    "unable to provide",
+    "provided text indicates",
+]
+
+def is_valid_signal(ticker: str, summary: str) -> bool:
+    if not ticker or ticker == "UNKNOWN":
+        return False
+    summary_lower = (summary or "").lower()
+    return not any(p in summary_lower for p in JUNK_PATTERNS)
+
+
+
 
 @dataclass
 class RawFiling:
@@ -223,6 +241,10 @@ class SignalPipeline:
                 filed_at=filing.filed_at,
                 config_version=self._config_version,
             )
+            
+        if not is_valid_signal(classification.get("ticker", ""), classification.get("summary", "")):
+            logger.warning(f"[PIPELINE] Discarding junk signal: {classification.get('summary', '')[:60]}")
+            return None
         
         # Step 3: Event classification (deterministic taxonomy)
         try:

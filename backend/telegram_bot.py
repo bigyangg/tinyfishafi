@@ -25,13 +25,67 @@ SIGNAL_EMOJI = {
     "Risk": "\U0001f534",      # red circle
 }
 
+# Event type labels for human-readable messages
+EVENT_LABELS = {
+    "EARNINGS_BEAT":      "Earnings Beat",
+    "EARNINGS_MISS":      "Earnings Miss",
+    "EXEC_DEPARTURE":     "Executive Departure",
+    "EXEC_APPOINTMENT":   "New Executive",
+    "MERGER_ACQUISITION": "M&A Activity",
+    "LEGAL_REGULATORY":   "Legal/Regulatory",
+    "DEBT_FINANCING":     "Debt/Financing",
+    "MATERIAL_EVENT":     "Material Event",
+    "DIVIDEND":           "Dividend Change",
+    "ROUTINE_ADMIN":      "Administrative",
+}
 
-def send_signal_alert(signal_data):
+
+def should_send_telegram(signal_data: dict, watchlist_tickers: list = None) -> bool:
     """
-    Send a formatted Telegram alert for a new signal using HTML parse mode.
-    
+    Smart threshold logic — decides if a signal warrants a Telegram alert.
+    Always alerts for watchlist tickers; uses confidence + impact for others.
+    """
+    if not TELEGRAM_ENABLED:
+        return False
+    if not BOT_TOKEN or not CHAT_ID:
+        return False
+
+    ticker     = signal_data.get("ticker", "")
+    signal     = signal_data.get("signal", "Neutral")
+    confidence = signal_data.get("confidence", 0) or 0
+    impact     = signal_data.get("impact_score", 0) or 0
+    event_type = signal_data.get("event_type", "")
+
+    # Never alert for Pending signals
+    if signal == "Pending":
+        return False
+
+    # ALWAYS alert for watchlist tickers (regardless of score)
+    if watchlist_tickers and ticker in watchlist_tickers:
+        return True
+
+    # ALWAYS alert for high-confidence non-routine events
+    if event_type not in ("ROUTINE_ADMIN", None, "") and confidence >= 70:
+        return True
+
+    # Alert for Positive/Risk signals with decent confidence
+    if signal in ("Positive", "Risk") and confidence >= 60:
+        return True
+
+    # Alert for high impact scores
+    if impact >= 55:
+        return True
+
+    return False
+
+
+def send_signal_alert(signal_data, is_watched=False):
+    """
+    Send a rich, actionable Telegram alert for a new signal using HTML parse mode.
+
     Args:
-        signal_data: dict with keys: ticker, company, signal, summary, confidence, filed_at
+        signal_data: dict with keys: ticker, company, signal, summary, confidence, filed_at, etc.
+        is_watched: bool — whether this ticker is on any user's watchlist
     """
     if not TELEGRAM_ENABLED:
         logger.info("Telegram disabled — skipping alert")
@@ -73,36 +127,35 @@ def send_signal_alert(signal_data):
             date_str = str(filed_at)[:10] if filed_at else "Unknown"
 
         emoji = SIGNAL_EMOJI.get(signal, "\u26aa")
+        event_label = EVENT_LABELS.get(event_type, event_type or "8-K Filing")
 
         # Build SEC EDGAR URL
-        edgar_url = ""
-        if accession:
-            clean = accession.replace("-", "")
-            edgar_url = f"https://www.sec.gov/Archives/edgar/data/{clean}/{accession}-index.htm"
+        edgar_url = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={ticker}&type=8-K&dateb=&owner=include&count=5"
 
-        # Build enrichment line if available
+        # Watched ticker indicator
+        watched_line = "\u2b50 <b>WATCHED TICKER</b>\n\n" if is_watched else ""
+
+        # Event + impact line
         enrichment = ""
         if event_type:
-            enrichment += f"\nEvent: <code>{_escape_html(event_type)}</code>"
+            enrichment += f"\nEvent: {_escape_html(event_label)}"
         if impact_score is not None:
             enrichment += f" | Impact: <code>{impact_score}/100</code>"
 
         message = (
-            f"\U0001f535 <b>AFI ALERT</b>\n"
-            f"\n"
-            f"<code>{ticker}</code> — {filing_type}\n"
+            f"{watched_line}"
+            f"\U0001f514 <b>AFI ALERT</b>\n\n"
+            f"<b>{ticker}</b> \u2014 {filing_type}\n"
+            f"{_escape_html(company)}\n\n"
             f"Signal: {emoji} <b>{signal}</b>\n"
-            f"{summary}\n"
-            f"\n"
+            f"{summary}\n\n"
             f"Confidence: <code>{confidence}%</code> | {date_str}"
-            f"{enrichment}\n"
+            f"{enrichment}\n\n"
+            f'<a href="{edgar_url}">View on SEC EDGAR</a>'
         )
 
-        if edgar_url:
-            message += f'\n<a href="{edgar_url}">View on SEC EDGAR</a>'
-
         _send_telegram_message(message, parse_mode="HTML")
-        logger.info(f"Telegram alert sent for {ticker} ({signal})")
+        logger.info(f"Telegram alert sent for {ticker} ({signal}, impact={impact_score})")
 
     except Exception as e:
         logger.error(f"Failed to send Telegram alert: {e}")
@@ -130,6 +183,7 @@ def _send_telegram_message(text, parse_mode="HTML"):
             "chat_id": CHAT_ID,
             "text": text,
             "parse_mode": parse_mode,
+            "disable_web_page_preview": True,
         }
         with httpx.Client(timeout=10) as client:
             response = client.post(url, json=payload)
@@ -154,9 +208,14 @@ def send_test_message():
 
     try:
         _send_telegram_message(
-            "\U0001f535 <b>AFI Bot Test</b>\n\n"
+            "\U0001f514 <b>AFI Bot Test</b>\n\n"
             "Telegram integration is working.\n"
-            "You will receive alerts when new SEC filings are detected.",
+            "You will receive alerts when new SEC filings are detected.\n\n"
+            "Alert triggers:\n"
+            "\u2022 Watchlist tickers (always)\n"
+            "\u2022 High-confidence non-routine events (\u226570%)\n"
+            "\u2022 Positive/Risk signals (\u226560% confidence)\n"
+            "\u2022 High impact scores (\u226555/100)",
             parse_mode="HTML",
         )
         logger.info("Test message sent successfully")

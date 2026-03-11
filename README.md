@@ -8,13 +8,14 @@ AFI is a real-time market event intelligence platform for active traders and fin
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | React 19, React Router v7, Tailwind CSS |
+| Frontend | React 19, React Router v7 |
 | Backend | FastAPI (Python 3.10+) |
 | Database | Supabase (PostgreSQL + Realtime) |
 | Authentication | Supabase Auth (Email/Password) |
 | AI Classification | Google Gemini 2.5 Flash |
 | Web Scraping | TinyFish Web Agent API |
-| Alerts | Telegram Bot API |
+| Alerts | Telegram Bot API, Browser Push Notifications |
+| Email | Resend (optional, for daily digests) |
 | Fonts | Inter (UI), JetBrains Mono (Data) |
 
 ---
@@ -51,8 +52,10 @@ TELEGRAM_BOT_TOKEN=your-telegram-bot-token
 TELEGRAM_CHAT_ID=your-telegram-chat-id
 USE_TINYFISH=true
 TELEGRAM_ENABLED=true
-TELEGRAM_IMPACT_THRESHOLD=40
 CORS_ORIGINS=*
+RESEND_API_KEY=your-resend-key          # Optional: for daily email digests
+DIGEST_EMAIL=you@example.com            # Optional: digest recipient
+FRONTEND_URL=http://localhost:3000      # Optional: used in digest email links
 ```
 
 ### 3. Configure Frontend Environment
@@ -111,27 +114,30 @@ tinyfishafi/
     sentiment_analyzer.py  # Filing vs news tone comparison
     impact_engine.py       # Rule-based composite scoring (0-100)
     price_tracker.py       # Scheduled T+1h/24h/3d price correlation checks
-    telegram_bot.py        # Telegram alert dispatcher (HTML formatted)
+    telegram_bot.py        # Smart Telegram alerts (watchlist-aware, multi-threshold)
     schema_migration.sql   # Phase 3 database migration script
     requirements.txt       # Python dependencies (includes yfinance)
     .env                   # Backend environment configuration
     tests/                 # Unit tests for all pipeline modules
   frontend/
+    public/
+      sw.js                           # Service worker for browser push notifications
     src/
       App.js                          # Client-side routing
       lib/supabase.js                # Supabase client singleton
       context/AuthContext.jsx         # Authentication state management
+      hooks/
+        usePushNotifications.js       # Browser notification hook
       pages/
         Landing.jsx                   # Marketing landing page
         Auth.jsx                      # Login and signup forms
-        Dashboard.jsx                 # Real-time alert feed with live status + brief age
-        Pricing.jsx                   # Subscription tiers
+        Dashboard.jsx                 # Real-time alert feed with caching + skeletons
       components/
-        AlertCard.jsx                 # Signal card: confidence bar, impact bar, event badge, ★ quick-add
+        AlertCard.jsx                 # Dense 4-column signal card
+        SignalSkeleton.jsx            # Shimmer loading placeholders
         SignalDetailModal.jsx         # Full signal detail with event type + impact score
-        WatchlistPanel.jsx            # Ticker search via backend proxy (/api/ticker/search)
-        DashboardSidebar.jsx          # Navigation with Telegram test
-    tailwind.config.js                # Design system configuration
+        WatchlistPanel.jsx            # Ticker search via backend proxy
+        DashboardSidebar.jsx          # Navigation with sign out + Telegram test
     .env                              # Frontend environment configuration
   CLAUDE.md                           # Architecture and constraints reference
   README.md                           # This file
@@ -166,7 +172,7 @@ The agent (`edgar_agent.py`) runs autonomously on a 120-second interval:
 4. Deduplicates against the Supabase `accession_number` field
 5. Extracts document text via **3-step fallback chain**: TinyFish -> SEC EFTS full-text -> HTTP scrape (with `follow_redirects`)
 6. Delegates to `SignalPipeline.process()` for full classification + enrichment
-7. Dispatches a Telegram alert **only if impact >= TELEGRAM_IMPACT_THRESHOLD** (default 40)
+7. Dispatches a Telegram alert using smart thresholds (watchlist tickers always, confidence >= 60 for Positive/Risk, impact >= 55)
 
 If the Gemini API key is missing or invalid, filings are stored as "Pending" with confidence 0. The agent never crashes on individual filing failures.
 
@@ -177,14 +183,19 @@ AFI has three independent, optional notification channels:
 ```
 New signal stored in Supabase
         |
-  +-----+------+
-  |     |      |
-  v     v      v
-Email  Telegram  Dashboard
-(Resend) (Bot)  (Realtime WS)
+  +-----+------+------+
+  |     |      |      |
+  v     v      v      v
+Email  Telegram  Browser  Dashboard
+(Resend) (Bot)  (Push)   (Realtime WS)
 ```
 
-Each channel works independently — disabling one does not affect the others. The Dashboard receives signals via Supabase Realtime WebSocket subscriptions. Telegram alerts are sent via the Bot API with HTML formatting. Email notifications (via Resend) are planned for Phase 4.
+Each channel works independently — disabling one does not affect the others:
+
+- **Dashboard:** Receives signals via Supabase Realtime WebSocket. Shows skeleton UI while loading, then instant cache hits on revisit.
+- **Telegram:** Smart multi-threshold alerting. Always alerts for watchlist tickers. Rich HTML format with company info, event labels, and SEC EDGAR links.
+- **Browser Push:** Native OS notifications when tab is closed. Permission prompt shown on first visit. Service worker handles background events.
+- **Email Digest:** Daily summary of top 5 signals via Resend. Triggered via `POST /api/digest/send` (schedule with cron). Returns HTML preview if Resend is not configured.
 
 ### Real-Time Dashboard
 
@@ -235,7 +246,8 @@ The `/api/brief` endpoint sends the last 10 signals to Gemini and returns a 3-se
 - `POST /api/config` - Update config (auto-increments version)
 
 ### Intelligence
-- `GET /api/brief` - AI-generated 3-sentence market brief from latest signals
+- `GET /api/brief` - AI-generated 3-sentence market brief (cached 5 min server-side)
+- `POST /api/digest/send` - Send daily email digest of top signals (via Resend)
 
 ### Telegram
 - `POST /api/telegram/test` - Send a test message to the configured Telegram chat
@@ -342,9 +354,16 @@ Constraint: UNIQUE(user_id, ticker). Maximum 10 tickers per user.
 - Live dashboard polish (countdown, animations, WATCHED badges)
 - Telegram HTML formatting fix
 
-### Phase 4: Enterprise (Planned)
+### Phase 4: Proactive Alerting (Complete)
+- Smart Telegram thresholds (watchlist-aware, multi-factor)
+- Rich HTML Telegram alerts (company info, event labels, EDGAR links)
+- Browser push notifications (service worker + permission prompt)
+- Daily email digest endpoint (Resend integration)
+- Dashboard performance: parallel fetching, sessionStorage caching, skeleton UI
+
+### Phase 5: Enterprise (Planned)
 - Form 4, 10-K, 10-Q, S-1 filing support via plugin processors
 - REST API gateway for Pro-tier subscribers
-- Email notifications via Resend
+- Per-user Telegram alerts (personal chat IDs)
 - Stripe billing integration
 - White-label API for institutional clients

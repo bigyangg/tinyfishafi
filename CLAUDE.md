@@ -2,9 +2,9 @@
 
 ## Overview
 
-AFI (Market Event Intelligence) is a real-time signal platform for traders. It polls SEC EDGAR for 8-K filings, classifies market events with Google Gemini 2.5 Flash, enriches with price data and news sentiment, scores impact (0–100), and delivers structured signals through a live dashboard and Telegram alerts.
+AFI (Market Event Intelligence) is a real-time signal platform for traders. It polls SEC EDGAR for 8-K filings, classifies market events with Google Gemini 2.5 Flash, enriches with price data and news sentiment, scores impact (0–100), and delivers structured signals through a live dashboard, Telegram alerts, browser push notifications, and email digests.
 
-**Current state:** Phase 3 complete. Full enrichment pipeline with 3-step text extraction fallback, CIK-to-ticker resolution, event taxonomy, impact scoring, price correlation tracking, configurable Telegram threshold, and signal feedback loop.
+**Current state:** Phase 4 complete. Proactive alerting with smart Telegram thresholds (watchlist-aware), browser push notifications via service worker, daily email digest endpoint, and dashboard performance optimizations (parallel fetch, caching, skeleton UI).
 
 ---
 
@@ -29,7 +29,7 @@ All backend routes use the `/api/` prefix.
 ### Backend — Core
 - `server.py` - FastAPI app. Auth, signal/watchlist CRUD, agent control, config management, signal correction endpoint, price correlation endpoint, **ticker search proxy** (`/api/ticker/search`). Auto-starts EDGAR agent on boot.
 - `edgar_agent.py` - Autonomous 8-K poller. 120-second interval. **3-step text extraction fallback** (TinyFish -> SEC EFTS -> HTTP scrape). **CIK-to-ticker resolution** via SEC submissions API. Delegates to SignalPipeline. Configurable Telegram threshold (`TELEGRAM_IMPACT_THRESHOLD`). Integrates price tracker.
-- `telegram_bot.py` - HTML-formatted alerts via Telegram Bot API. Only fires when `impact >= TELEGRAM_IMPACT_THRESHOLD` (default 40). Includes `send_test_message()`.
+- `telegram_bot.py` - Smart Telegram alerts. `should_send_telegram()` with multi-factor thresholds: always alerts watchlist tickers, confidence >= 60 for Positive/Risk, impact >= 55. Rich HTML format with company name, event labels, EDGAR links. `send_signal_alert(data, is_watched)` adds watched indicator.
 
 ### Backend — Pipeline (Phase 3)
 - `signal_pipeline.py` - Core orchestrator. Registry pattern: `register_processor(type, processor)`. Routes: Classify -> Taxonomy -> Enrich -> Score -> Store. `EightKProcessor` uses Gemini. **Per-step error handling** with context logging (accession, filing type, company). New filing types plug in via one new class + registration.
@@ -40,16 +40,19 @@ All backend routes use the `/api/` prefix.
 - `price_tracker.py` - Scheduled T+1h/T+24h/T+3d price checks. Database rows, not asyncio.sleep. Survives restarts.
 
 ### Frontend
-- `Dashboard.jsx` - Real-time alert feed. Health check polling (30s). Agent status bar. AI brief panel with **live age counter**. Watchlist quick-add via AlertCard props.
-- `AlertCard.jsx` - Signal card with confidence bar (green/amber/red), **impact bar**, **event type badge**, **★ watchlist quick-add button**, hover affordance, slideDown animation.
+- `Dashboard.jsx` - Real-time alert feed. Parallel data fetching via `Promise.allSettled`. sessionStorage cache for signals (90s TTL), localStorage cache for watchlist (optimistic updates). Skeleton loading UI. Browser push notification prompt. Health check polling (30s).
+- `AlertCard.jsx` - Dense 4-column signal card.
+- `SignalSkeleton.jsx` - Shimmer loading placeholders (SignalSkeleton, StatsSkeleton, WatchlistSkeleton).
 - `WatchlistPanel.jsx` - Ticker management via **backend proxy** (`/api/ticker/search`). Autocomplete dropdown.
 - `SignalDetailModal.jsx` - Full signal detail overlay with **event type**, **impact score bar**, SEC EDGAR link.
-- `DashboardSidebar.jsx` - Navigation with "Test Telegram" button.
+- `DashboardSidebar.jsx` - Navigation with Sign Out + Telegram test.
+- `hooks/usePushNotifications.js` - Browser notification hook. Requests permission, fires native notifications when tab not visible.
+- `public/sw.js` - Service worker for background push notification events.
 - `AuthContext.jsx` - Supabase Auth state.
 - `lib/supabase.js` - Supabase client singleton.
 
 ### Environment Variables
-**Backend (.env):** `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `TINYFISH_API_KEY`, `GEMINI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `USE_TINYFISH`, `TELEGRAM_ENABLED`, `TELEGRAM_IMPACT_THRESHOLD` (default 40), `CORS_ORIGINS`
+**Backend (.env):** `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `TINYFISH_API_KEY`, `GEMINI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `USE_TINYFISH`, `TELEGRAM_ENABLED`, `CORS_ORIGINS`, `RESEND_API_KEY` (optional), `DIGEST_EMAIL` (optional), `FRONTEND_URL` (optional)
 
 **Frontend (.env):** `REACT_APP_SUPABASE_URL`, `REACT_APP_SUPABASE_ANON_KEY`, `REACT_APP_BACKEND_URL`
 
@@ -102,7 +105,8 @@ API maps: `signal` -> `classification`, `company` -> `company_name` via `format_
 | GET | /api/watchlist | User watchlist |
 | POST | /api/watchlist | Add ticker |
 | DELETE | /api/watchlist/{ticker} | Remove ticker |
-| GET | /api/brief | AI market intelligence summary |
+| GET | /api/brief | AI market intelligence summary (5-min server cache) |
+| POST | /api/digest/send | Daily email digest (Resend) |
 | POST | /api/telegram/test | Send test Telegram message |
 | GET | /api/config | Agent config (Phase 3) |
 | POST | /api/config | Update agent config (Phase 3) |
@@ -142,6 +146,8 @@ Log format includes accession number, ticker, filing type, company name, and exc
 
 **Phase 2 (Complete):** Supabase migration, EDGAR agent, Gemini classification, Telegram alerts, real-time dashboard, health monitoring, AI brief.
 
-**Phase 3 (Complete):** Signal pipeline, event taxonomy, market data enrichment (yfinance), sentiment analysis, impact scoring, price correlation tracking, config versioning, signal feedback loop, CIK-to-ticker resolution, SEC EFTS text extraction fallback, configurable Telegram threshold, ticker search proxy, pipeline error handling.
+**Phase 3 (Complete):** Signal pipeline, event taxonomy, market data enrichment (yfinance), sentiment analysis, impact scoring, price correlation tracking, config versioning, signal feedback loop, CIK-to-ticker resolution, SEC EFTS text extraction fallback, ticker search proxy, pipeline error handling.
 
-**Phase 4 (Planned):** Form 4 XML parser, 10-K/10-Q section extractor, 13D materiality filter, Pro-tier REST API, Stripe billing, email notifications (Resend).
+**Phase 4 (Complete):** Smart Telegram thresholds (watchlist-aware, multi-factor), rich HTML alerts, browser push notifications (service worker + permission prompt), daily email digest endpoint (Resend), dashboard performance (parallel fetch, caching, skeleton UI), sidebar cleanup.
+
+**Phase 5 (Planned):** Form 4 XML parser, 10-K/10-Q section extractor, 13D materiality filter, per-user Telegram chat IDs, Pro-tier REST API, Stripe billing.

@@ -16,6 +16,7 @@ from typing import List, Optional
 import uuid
 from datetime import datetime, timezone, timedelta
 import json
+import httpx
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -162,9 +163,9 @@ def format_signal_for_api(row):
 
 # ============ SIGNALS ROUTES ============
 @api_router.get("/signals")
-async def get_signals(tickers: Optional[str] = None):
+async def get_signals(tickers: Optional[str] = None, limit: int = 50, offset: int = 0):
     try:
-        query = supabase.table("signals").select("*").order("filed_at", desc=True)
+        query = supabase.table("signals").select("*").order("filed_at", desc=True).limit(limit).offset(offset)
         if tickers:
             ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
             query = query.in_("ticker", ticker_list)
@@ -319,6 +320,27 @@ async def edgar_stop():
     edgar_agent_instance.stop()
     return {"status": "stopped", "message": "EDGAR polling agent stopped"}
 
+# ============ MANUAL FETCH ============
+class ManualFetch(BaseModel):
+    ticker: str
+
+@api_router.post("/edgar/fetch-company")
+async def edgar_fetch_company(data: ManualFetch):
+    global edgar_agent_instance
+    if edgar_agent_instance is None:
+        try:
+            from edgar_agent import EdgarAgent
+            edgar_agent_instance = EdgarAgent(supabase)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    result = edgar_agent_instance.fetch_company_latest(data.ticker.strip().upper())
+    if result.get("status") == "error":
+        raise HTTPException(status_code=500, detail=result.get("message"))
+    if result.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail=result.get("message"))
+    return result
+
 # ============ AGENT CONFIG ============
 @api_router.get("/config")
 async def get_config():
@@ -395,10 +417,31 @@ async def telegram_test():
         return {"status": "error", "message": str(e)}
 
 # ============ AI BRIEF ============
+_brief_cache = {"text": None, "timestamp": 0, "signal_count": 0}
+BRIEF_TTL = 300  # 5 minutes
+
 @api_router.get("/brief")
 async def get_brief():
-    """Generate a 3-sentence market intelligence brief from the latest signals."""
+    """Generate a 3-sentence market intelligence brief from the latest signals (cached)."""
+    global _brief_cache
+    import time as _time
+
     try:
+        # Get current signal count to detect new signals
+        count_result = supabase.table("signals").select("id", count="exact").limit(1).execute()
+        current_count = len(supabase.table("signals").select("id").execute().data or [])
+
+        now = _time.time()
+        cache_valid = (
+            _brief_cache["text"] is not None
+            and (now - _brief_cache["timestamp"]) < BRIEF_TTL
+            and _brief_cache["signal_count"] == current_count
+        )
+
+        if cache_valid:
+            return {"brief": _brief_cache["text"], "signal_count": current_count, "cached": True}
+
+        # Cache miss — generate fresh
         result = supabase.table("signals").select("*").order("filed_at", desc=True).limit(10).execute()
         signals = result.data or []
 
@@ -413,11 +456,11 @@ async def get_brief():
 
         gemini_key = os.environ.get("GEMINI_API_KEY", "")
         if not gemini_key or gemini_key.startswith("YOUR_"):
-            # Fallback: generate a simple brief without AI
             positive = sum(1 for s in signals if s.get("signal") == "Positive")
             risk = sum(1 for s in signals if s.get("signal") == "Risk")
             neutral = sum(1 for s in signals if s.get("signal") == "Neutral")
             brief = f"AFI has processed {len(signals)} signals. {positive} classified as Positive, {risk} as Risk, {neutral} as Neutral. Monitor your watchlist for targeted alerts."
+            _brief_cache = {"text": brief, "timestamp": now, "signal_count": current_count}
             return {"brief": brief, "signal_count": len(signals)}
 
         import google.generativeai as genai
@@ -432,10 +475,83 @@ Signals:
         response = model.generate_content(prompt)
         brief_text = response.text.strip()
 
-        return {"brief": brief_text, "signal_count": len(signals)}
+        _brief_cache = {"text": brief_text, "timestamp": now, "signal_count": current_count}
+        return {"brief": brief_text, "signal_count": len(signals), "cached": False}
     except Exception as e:
         logger.error(f"Failed to generate brief: {e}")
+        # Return stale cache if available
+        if _brief_cache["text"]:
+            return {"brief": _brief_cache["text"], "signal_count": 0, "cached": True, "stale": True}
         return {"brief": "Unable to generate market brief at this time.", "signal_count": 0}
+
+# ============ DAILY DIGEST ============
+@api_router.post("/digest/send")
+async def send_daily_digest():
+    """Send daily digest of top signals. Call via cron at 4PM EST."""
+    from datetime import datetime as _dt, timezone as _tz
+    today = _dt.now(_tz.utc).date().isoformat()
+
+    result = supabase.table("signals")\
+        .select("*")\
+        .gte("filed_at", f"{today}T00:00:00")\
+        .order("impact_score", desc=True)\
+        .limit(10)\
+        .execute()
+
+    signals = result.data or []
+    if not signals:
+        return {"sent": 0, "reason": "No signals today"}
+
+    # Build HTML rows
+    rows_html = ""
+    for s in signals[:5]:
+        sig_color = {"Positive": "#00C805", "Risk": "#FF3333"}.get(s.get("signal", ""), "#666")
+        summary_text = (s.get("summary") or "")[:80]
+        rows_html += (
+            f'<tr>'
+            f'<td style="font-family:monospace;font-weight:700;padding:8px 12px;border-bottom:1px solid #111;color:#fff;">{s.get("ticker","?")}</td>'
+            f'<td style="color:{sig_color};font-family:monospace;padding:8px 12px;border-bottom:1px solid #111;">{s.get("signal","?")}</td>'
+            f'<td style="color:#666;padding:8px 12px;border-bottom:1px solid #111;font-size:13px;">{summary_text}...</td>'
+            f'<td style="font-family:monospace;color:#444;padding:8px 12px;border-bottom:1px solid #111;">{s.get("impact_score",0)}/100</td>'
+            f'</tr>'
+        )
+
+    email_html = (
+        f'<div style="background:#050505;color:#fff;padding:32px;font-family:sans-serif;max-width:600px;">'
+        f'<h2 style="font-family:monospace;color:#fff;letter-spacing:0.1em;font-size:14px;margin-bottom:4px;">AFI DAILY DIGEST</h2>'
+        f'<p style="color:#333;font-size:12px;font-family:monospace;margin-bottom:24px;">{today} &mdash; {len(signals)} filings processed</p>'
+        f'<table style="width:100%;border-collapse:collapse;border:1px solid #111;">'
+        f'<thead><tr style="background:#0a0a0a;">'
+        f'<th style="font-family:monospace;font-size:10px;color:#333;padding:8px 12px;text-align:left;letter-spacing:0.1em;">TICKER</th>'
+        f'<th style="font-family:monospace;font-size:10px;color:#333;padding:8px 12px;text-align:left;letter-spacing:0.1em;">SIGNAL</th>'
+        f'<th style="font-family:monospace;font-size:10px;color:#333;padding:8px 12px;text-align:left;letter-spacing:0.1em;">SUMMARY</th>'
+        f'<th style="font-family:monospace;font-size:10px;color:#333;padding:8px 12px;text-align:left;letter-spacing:0.1em;">IMPACT</th>'
+        f'</tr></thead>'
+        f'<tbody>{rows_html}</tbody></table>'
+        f'<div style="margin-top:24px;padding-top:16px;border-top:1px solid #111;">'
+        f'<a href="{os.environ.get("FRONTEND_URL", "http://localhost:3000")}/dashboard" '
+        f'style="font-family:monospace;font-size:11px;color:#0066FF;text-decoration:none;letter-spacing:0.06em;">'
+        f'VIEW FULL DASHBOARD &rarr;</a></div></div>'
+    )
+
+    resend_key = os.environ.get("RESEND_API_KEY", "")
+    digest_email = os.environ.get("DIGEST_EMAIL", "")
+    if resend_key and digest_email:
+        try:
+            import resend
+            resend.api_key = resend_key
+            resend.Emails.send({
+                "from": "AFI <alerts@afi.dev>",
+                "to": [digest_email],
+                "subject": f"AFI Daily Digest - {len(signals)} signals | {today}",
+                "html": email_html,
+            })
+            return {"sent": 1, "signals": len(signals)}
+        except Exception as e:
+            logger.error(f"[DIGEST] Resend failed: {e}")
+            return {"sent": 0, "error": str(e), "html_preview": email_html}
+
+    return {"sent": 0, "reason": "RESEND_API_KEY not configured", "signals": len(signals), "html_preview": email_html}
 
 # ============ SEED CLEANUP ============
 async def cleanup_seed_data():
