@@ -1,6 +1,6 @@
 # AFI - Market Event Intelligence
 
-AFI is a real-time market event intelligence platform for active traders and finance researchers. It monitors SEC EDGAR filings continuously, detects new 8-K events within 2 minutes of publication, classifies market impact, enriches with price and sentiment data, and delivers structured signals through a live dashboard and Telegram alerts.
+AFI is a real-time market event intelligence platform for active traders and finance researchers. It monitors SEC EDGAR continuously, detects new multi-form filings (8-K, 10-K, 10-Q, 4, SC 13D) within 2 minutes of publication, applies a rigorous 5-stage governance validation check, classifies market impact with AI, and delivers structured signals through a live dashboard and Telegram alerts.
 
 ---
 
@@ -12,8 +12,9 @@ AFI is a real-time market event intelligence platform for active traders and fin
 | Backend | FastAPI (Python 3.10+) |
 | Database | Supabase (PostgreSQL + Realtime) |
 | Authentication | Supabase Auth (Email/Password) |
-| AI Classification | Google Gemini 2.5 Flash |
+| AI Classification | Google Gemini 2.5 Flash (via `google.genai` SDK) |
 | Web Scraping | TinyFish Web Agent API |
+| Live Data Streaming | Server-Sent Events (SSE) |
 | Alerts | Telegram Bot API, Browser Push Notifications |
 | Email | Resend (optional, for daily digests) |
 | Fonts | Inter (UI), JetBrains Mono (Data) |
@@ -96,7 +97,8 @@ The dashboard will be available at `http://localhost:3000`.
 - Open `http://localhost:3000` and log in
 - The **Agent Status Bar** at the top should show **UP** with a pulsing green dot
 - The **ONLINE** badge in the top-right confirms backend connectivity
-- Real 8-K filings should appear within the first poll cycle (120 seconds)
+- Real filings (8-K, 10-K, 10-Q, Form 4, SC 13D) should appear within the first poll cycle (120 seconds)
+- Add `?demo=true` to the dashboard URL for a demo trigger panel to test with any form type
 - Click **Test Telegram** in the sidebar to verify Telegram alerts
 
 ---
@@ -107,7 +109,7 @@ The dashboard will be available at `http://localhost:3000`.
 tinyfishafi/
   backend/
     server.py              # FastAPI app: auth, signals, watchlist, agent control, config, health
-    edgar_agent.py         # EDGAR 8-K polling agent — delegates to signal pipeline
+    edgar_agent.py         # EDGAR multi-form polling agent (8-K, 10-K, 10-Q, 4, SC 13D)
     signal_pipeline.py     # Core orchestrator: classify -> enrich -> score -> store
     event_classifier.py    # Deterministic taxonomy mapper (8-K item extraction)
     market_data.py         # Yahoo Finance wrapper with 5-min TTL cache
@@ -137,7 +139,7 @@ tinyfishafi/
         Settings.jsx                  # User settings page
       components/
         AppShell.jsx                  # Shared layout shell (sidebar + status bar)
-        AlertCard.jsx                 # Compact 3-column signal card (ticker | summary | score+time)
+        AlertCard.jsx                 # Filing card with form-type badge, confidence score, and event label
         SignalSkeleton.jsx            # Shimmer loading placeholders
         SignalDetailModal.jsx         # Full signal detail with event type + impact score
         WatchlistPanel.jsx            # Ticker search via backend proxy
@@ -171,12 +173,20 @@ New filing types plug in via registry: `pipeline.register_processor("4", Form4Pr
 The agent (`edgar_agent.py`) runs autonomously on a 120-second interval:
 
 1. Loads config and processes promotion queue at cycle start
-2. Queries SEC EDGAR EFTS for new 8-K filings filed today
+2. Queries SEC EDGAR EFTS for new filings (8-K, 10-K, 10-Q, Form 4, SC 13D) filed today
 3. **Resolves tickers from CIK** via `data.sec.gov/submissions/CIK{padded}.json`
 4. Deduplicates against the Supabase `accession_number` field
 5. Extracts document text via **3-step fallback chain**: TinyFish -> SEC EFTS full-text -> HTTP scrape (with `follow_redirects`)
-6. Delegates to `SignalPipeline.process()` for full classification + enrichment
-7. Dispatches a Telegram alert using smart thresholds (watchlist tickers always, confidence >= 60 for Positive/Risk, impact >= 55)
+6. Routes to the correct form-specific processor via registry pattern
+7. Delegates to `SignalPipeline.process()` for full classification + enrichment
+8. Dispatches a Telegram alert using smart thresholds (watchlist tickers always, confidence >= 60 for Positive/Risk, impact >= 55)
+
+Each filing type has a dedicated processor with tailored Gemini prompts:
+- **Form8KProcessor** — Material events, earnings, leadership changes, debt financing
+- **Form10KProcessor** — Annual reports, revenue trends, audit opinions
+- **Form10QProcessor** — Quarterly earnings, beat/miss, guidance changes
+- **Form4Processor** — Insider buys/sells, option exercises, transaction significance
+- **FormSC13DProcessor** — Activist entries, stake sizes, investor intent
 
 If the Gemini API key is missing or invalid, filings are stored as "Pending" with confidence 0. The agent never crashes on individual filing failures.
 
@@ -208,12 +218,21 @@ The frontend subscribes to Supabase `postgres_changes` on the `signals` table. N
 - Pulsing green dot when agent is UP, red status bar when DOWN
 - Live countdown to next poll (ticks every second)
 - Filings processed counter (updates via realtime)
-- **Categorized feed:** signals grouped by event type (EARNINGS & FINANCIAL, LEADERSHIP & CORP EVENTS, REGULATORY & LEGAL, ROUTINE FILINGS)
+- **Categorized feed:** signals grouped by event type across 7 categories:
+  - EARNINGS & FINANCIAL (green) — earnings beats/misses, quarterly reports
+  - INSIDER ACTIVITY (purple) — insider buys/sells from Form 4
+  - ACTIVIST & CORPORATE (blue) — activist entries from SC 13D
+  - LEADERSHIP & CORP EVENTS (orange) — executive changes, M&A
+  - ANNUAL REPORTS (amber) — 10-K annual filings
+  - REGULATORY & LEGAL (red) — compliance, litigation
+  - ROUTINE FILINGS (gray) — administrative filings
 - **Accordion sections:** each category is a collapsible card with SHOW/HIDE button, ticker previews when collapsed, and count badges
-- **FeedSummaryBar:** quick-glance category pill counts in the header
+- **FeedSummaryBar:** quick-glance category pill counts (all 7 categories, shown when signals exist)
 - ALL/WATCHLIST/RISK/OPPORTUNITY filter tabs with count badges
 - **★ Quick-add button** on each card to add ticker to watchlist
-- **Impact bar** and **event type label** on each compact 3-column card
+- **Filing type badges** (color-coded: 8-K blue, 10-K amber, 10-Q green, Form 4 purple, SC 13D orange)
+- **Confidence scores** (color-coded by threshold) and **event type labels** on each card
+- **Impact bar** on each compact 3-column card
 - Yahoo Finance autocomplete for watchlist via backend proxy
 - **Right panel:** TODAY stats (bordered cards), TOP SIGNALS (mini-cards with colored borders), MARKET BRIEF (AI summary card), WATCHLIST zone
 - 30-second relative timestamp auto-updates
@@ -257,6 +276,12 @@ The `/api/brief` endpoint sends the last 10 signals to Gemini and returns a 3-se
 - `GET /api/brief` - AI-generated 3-sentence market brief (cached 5 min server-side)
 - `POST /api/digest/send` - Send daily email digest of top signals (via Resend)
 
+### Demo
+- `POST /api/demo/trigger` - Trigger a real pipeline run for any ticker and form type (`{"ticker": "NVDA", "form": "4"}`)
+  - Supported forms: `8-K`, `10-K`, `10-Q`, `4`, `SC 13D`
+  - Fetches the latest filing from SEC EDGAR and runs the full pipeline
+  - Returns immediately; signal appears in ~30s via Supabase Realtime
+
 ### Telegram
 - `POST /api/telegram/test` - Send a test message to the configured Telegram chat
 
@@ -271,7 +296,7 @@ The `/api/brief` endpoint sends the last 10 signals to Gemini and returns a 3-se
 | id | UUID | Primary key |
 | ticker | TEXT | Stock symbol (uppercase) |
 | company | TEXT | Company name |
-| filing_type | TEXT | Filing type (8-K) |
+| filing_type | TEXT | Filing type (8-K, 10-K, 10-Q, 4, SC 13D) |
 | signal | TEXT | Positive, Neutral, Risk, or Pending |
 | confidence | INTEGER | 0-100 scale |
 | summary | TEXT | AI-generated classification summary |
@@ -328,7 +353,8 @@ Constraint: UNIQUE(user_id, ticker). Maximum 10 tickers per user.
 - Surface: `#0A0A0A`, Cards: `#0c0c0c`
 - Accent: `#0066FF`
 - Signal colors: Positive `#00C805`, Risk `#FF3333`, Neutral `#71717A`
-- Category colors: Earnings `#00C805`, Leadership `#FF6B00`, Legal `#FF3333`, Routine `#555`
+- Category colors: Earnings `#00C805`, Insider `#A855F7`, Activist `#0066FF`, Leadership `#FF6B00`, Annual `#F59E0B`, Legal `#FF3333`, Routine `#555`
+- Filing badge colors: 8-K `#0066FF`, 10-K `#F59E0B`, 10-Q `#00C805`, Form 4 `#A855F7`, SC 13D `#FF6B00`
 - Border radius: 4px (cards), 6px (accordion panels), 10px (count badges)
 - Fonts: Inter (UI), JetBrains Mono (tickers, data, timestamps)
 - Animations: Subtle only (120ms transitions, pulse for live indicators)
@@ -350,7 +376,7 @@ Constraint: UNIQUE(user_id, ticker). Maximum 10 tickers per user.
 - Real-time dashboard with WebSocket subscriptions
 - Health monitoring and AI market brief
 
-### Phase 3: Signal Pipeline (In Progress)
+### Phase 3: Signal Pipeline (Complete)
 - Extensible signal pipeline with registry pattern
 - Event taxonomy mapping (deterministic classification)
 - Yahoo Finance market data enrichment with TTL cache
@@ -383,8 +409,19 @@ Constraint: UNIQUE(user_id, ticker). Maximum 10 tickers per user.
 - Watchlist page with inline filing expand (opens signal detail in new tab)
 - GET /api/signals/:id endpoint for individual signal pages
 
-### Phase 6: Enterprise (Planned)
-- Form 4, 10-K, 10-Q, S-1 filing support via plugin processors
+### Phase 6: Multi-Form Architecture (Complete)
+- Form 4 insider transaction processor with buy/sell classification
+- 10-K annual report processor with revenue trend and audit analysis
+- 10-Q quarterly earnings processor with beat/miss detection
+- SC 13D activist filing processor with intent classification
+- Multi-form demo trigger endpoint (`POST /api/demo/trigger`)
+- Filing type color badges and confidence scores on AlertCard
+- 7-category dashboard feed (Earnings, Insider, Activist, Leadership, Annual, Legal, Routine)
+- Gemini SDK migrated from `google.generativeai` to `google.genai`
+- Dashboard signal polling replaced with Supabase Realtime subscription
+
+### Phase 7: Enterprise (Planned)
+- S-1 IPO filing support via plugin processor
 - REST API gateway for Pro-tier subscribers
 - Per-user Telegram alerts (personal chat IDs)
 - Stripe billing integration

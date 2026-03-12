@@ -28,6 +28,35 @@ ALTER TABLE signals ADD COLUMN IF NOT EXISTS correction_count INTEGER DEFAULT 0;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS config_version_at_classification INTEGER;
 
 -- ============================================
+-- 1b. Phase 6: Audit trail columns
+-- ============================================
+
+-- Filing form type (8-K, 10-K, 10-Q, 4, SC 13D) — defaults to 8-K for existing rows
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS filing_form TEXT DEFAULT '8-K';
+
+-- Chain of thought reasoning from Gemini (6 step breakdown)
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS chain_of_thought JSONB;
+
+-- Governance audit trail (5 checks with pass/fail and reason)
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS governance_audit JSONB;
+
+-- Impact score breakdown (base event, confidence, sentiment, watchlist contributions)
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS impact_breakdown JSONB;
+
+-- News cross-reference data
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS news_headlines JSONB;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS news_sentiment TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS divergence_type TEXT;
+
+-- Extraction metadata
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS extraction_source TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS extraction_time_ms INTEGER;
+
+-- Key facts and form-specific data
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS key_facts JSONB;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS form_data JSONB;
+
+-- ============================================
 -- 2. Price correlations table
 -- ============================================
 

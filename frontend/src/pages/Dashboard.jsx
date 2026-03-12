@@ -25,23 +25,42 @@ function debounce(func, wait) {
 
 // ── CATEGORY SYSTEM ──
 const CATEGORY_MAP = {
-  EARNINGS_BEAT: { group: 'EARNINGS & FINANCIAL', priority: 1 },
-  EARNINGS_MISS: { group: 'EARNINGS & FINANCIAL', priority: 1 },
-  DIVIDEND: { group: 'EARNINGS & FINANCIAL', priority: 1 },
-  DEBT_FINANCING: { group: 'EARNINGS & FINANCIAL', priority: 1 },
-  ASSET_SALE: { group: 'EARNINGS & FINANCIAL', priority: 1 },
-  EXEC_DEPARTURE: { group: 'LEADERSHIP & CORP EVENTS', priority: 2 },
-  EXEC_APPOINTMENT: { group: 'LEADERSHIP & CORP EVENTS', priority: 2 },
-  MERGER_ACQUISITION: { group: 'LEADERSHIP & CORP EVENTS', priority: 2 },
-  MATERIAL_EVENT: { group: 'LEADERSHIP & CORP EVENTS', priority: 2 },
-  LEGAL_REGULATORY: { group: 'REGULATORY & LEGAL', priority: 3 },
-  ROUTINE_ADMIN: { group: 'ROUTINE FILINGS', priority: 4 },
+  // Existing
+  EARNINGS_BEAT: { group: "EARNINGS & FINANCIAL", priority: 1 },
+  EARNINGS_MISS: { group: "EARNINGS & FINANCIAL", priority: 1 },
+  CONTRACT_WIN: { group: "EARNINGS & FINANCIAL", priority: 1 },
+  DIVIDEND: { group: "EARNINGS & FINANCIAL", priority: 1 },
+  DEBT_FINANCING: { group: "EARNINGS & FINANCIAL", priority: 1 },
+  ASSET_SALE: { group: "EARNINGS & FINANCIAL", priority: 1 },
+  GUIDANCE_RAISE: { group: "EARNINGS & FINANCIAL", priority: 1 },
+  GUIDANCE_CUT: { group: "EARNINGS & FINANCIAL", priority: 1 },
+  BUYBACK: { group: "EARNINGS & FINANCIAL", priority: 1 },
+  QUARTERLY_EARNINGS: { group: "EARNINGS & FINANCIAL", priority: 1 }, // ← 10-Q
+  ANNUAL_REPORT: { group: "ANNUAL REPORTS", priority: 2 }, // ← 10-K NEW
+  INSIDER_BUY: { group: "INSIDER ACTIVITY", priority: 1 }, // ← Form 4 NEW
+  INSIDER_SELL: { group: "INSIDER ACTIVITY", priority: 2 }, // ← Form 4 NEW
+  INSIDER_MIXED: { group: "INSIDER ACTIVITY", priority: 2 }, // ← Form 4 NEW
+  ACTIVIST_ENTRY: { group: "ACTIVIST & CORPORATE", priority: 1 }, // ← SC13D NEW
+  EXEC_DEPARTURE: { group: "LEADERSHIP & CORP EVENTS", priority: 2 },
+  EXEC_APPOINTMENT: { group: "LEADERSHIP & CORP EVENTS", priority: 2 },
+  LEADERSHIP_HIRE: { group: "LEADERSHIP & CORP EVENTS", priority: 2 },
+  MERGER_ACQUISITION: { group: "LEADERSHIP & CORP EVENTS", priority: 2 },
+  LEGAL_REGULATORY: { group: "REGULATORY & LEGAL", priority: 3 },
+  LITIGATION: { group: "REGULATORY & LEGAL", priority: 3 },
+  SEC_INVESTIGATION: { group: "REGULATORY & LEGAL", priority: 3 },
+  GOING_CONCERN: { group: "REGULATORY & LEGAL", priority: 3 },
+  RESTATEMENT: { group: "REGULATORY & LEGAL", priority: 3 },
+  ROUTINE_ADMIN: { group: "ROUTINE FILINGS", priority: 4 },
+  MATERIAL_EVENT: { group: "ROUTINE FILINGS", priority: 4 },
 };
 
 const GROUP_COLORS = {
   'EARNINGS & FINANCIAL': '#00C805',
   'LEADERSHIP & CORP EVENTS': '#FF6B00',
+  'INSIDER ACTIVITY': '#A855F7',
+  'ACTIVIST & CORPORATE': '#0066FF',
   'REGULATORY & LEGAL': '#FF3333',
+  'ANNUAL REPORTS': '#F59E0B',
   'ROUTINE FILINGS': '#1e1e1e',
 };
 
@@ -186,7 +205,10 @@ const FeedHeader = ({ filter, setFilter, count, tabCounts, categorizedSignals })
   const getCount = (name) => (categorizedSignals || []).find(g => g.name === name)?.signals.length || 0;
   const catItems = [
     { label: 'EARNINGS', count: getCount('EARNINGS & FINANCIAL'), color: '#00C805' },
+    { label: 'INSIDER', count: getCount('INSIDER ACTIVITY'), color: '#A855F7' },
+    { label: 'ACTIVIST', count: getCount('ACTIVIST & CORPORATE'), color: '#0066FF' },
     { label: 'LEADERSHIP', count: getCount('LEADERSHIP & CORP EVENTS'), color: '#FF6B00' },
+    { label: 'ANNUAL', count: getCount('ANNUAL REPORTS'), color: '#F59E0B' },
     { label: 'LEGAL', count: getCount('REGULATORY & LEGAL'), color: '#FF3333' },
     { label: 'ROUTINE', count: getCount('ROUTINE FILINGS'), color: '#555' },
   ].filter(i => i.count > 0);
@@ -778,20 +800,8 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
-  // Signal polling (health + agent check handled by AppShell)
-  useEffect(() => {
-    const signalInterval = setInterval(async () => {
-      try {
-        const res = await axios.get(`${API}/signals?limit=50`, { headers: authHeaders() });
-        const signals = res.data.signals || [];
-        setAllSignals(signals);
-        saveCache(SIGNAL_CACHE_KEY, signals);
-      } catch { }
-    }, 45000);
-
-    return () => clearInterval(signalInterval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Signal polling (removed to prevent hammering the database)
+  // Realtime subscription (below) handles new incoming signals
 
   // FIX 6: Realtime — stable deps, filter junk before adding
   useEffect(() => {
@@ -985,6 +995,115 @@ export default function Dashboard() {
 
   return (
     <AppShell>
+      {/* DEMO PANEL — visible when ?demo=true in URL */}
+      {window.location.search.includes('demo=true') && (() => {
+        const [demoForm, setDemoForm] = window.__demoForm || [null, null];
+        // Use a simple approach: store selected form in a data attribute on the panel
+        return (
+          <div style={{
+            background: '#0a0a0a',
+            borderBottom: '1px solid #111',
+            padding: '10px 16px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+            flexShrink: 0,
+          }}>
+            {/* Row 1: Form type selector */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontSize: '9px', color: '#555', letterSpacing: '0.1em', fontWeight: 700 }}>DEMO</span>
+              {[
+                { label: '8-K', form: '8-K', color: '#0066FF' },
+                { label: '10-K', form: '10-K', color: '#F59E0B' },
+                { label: '10-Q', form: '10-Q', color: '#00C805' },
+                { label: 'FORM 4', form: '4', color: '#A855F7' },
+                { label: 'SC 13D', form: 'SC 13D', color: '#FF6B00' },
+              ].map(f => {
+                const isActive = (document.getElementById('demo-form-select')?.value || '8-K') === f.form;
+                return (
+                  <button
+                    key={f.form}
+                    onClick={() => {
+                      const el = document.getElementById('demo-form-select');
+                      if (el) el.value = f.form;
+                      // Force re-render of buttons by toggling a class
+                      document.querySelectorAll('[data-form-btn]').forEach(btn => {
+                        btn.style.borderColor = '#1a1a1a';
+                        btn.style.color = '#444';
+                      });
+                      const thisBtn = document.querySelector(`[data-form-btn="${f.form}"]`);
+                      if (thisBtn) { thisBtn.style.borderColor = f.color; thisBtn.style.color = f.color; }
+                    }}
+                    data-form-btn={f.form}
+                    style={{
+                      background: '#080808',
+                      border: `1px solid ${f.form === '8-K' ? f.color : '#1a1a1a'}`,
+                      color: f.form === '8-K' ? f.color : '#444',
+                      padding: '3px 8px', fontSize: '9px', cursor: 'pointer',
+                      letterSpacing: '0.06em', fontFamily: "'JetBrains Mono', monospace",
+                      transition: 'border-color 100ms, color 100ms',
+                      borderRadius: '2px',
+                    }}
+                  >
+                    {f.label}
+                  </button>
+                );
+              })}
+              <input type="hidden" id="demo-form-select" defaultValue="8-K" />
+            </div>
+
+            {/* Row 2: Ticker buttons */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+              {['TSLA', 'NVDA', 'AAPL', 'MSFT', 'AMZN', 'COIN'].map(t => (
+                <button
+                  key={t}
+                  onClick={async () => {
+                    try {
+                      const form = document.getElementById('demo-form-select')?.value || '8-K';
+                      await axios.post(`${API}/demo/trigger`, { ticker: t, form });
+                    } catch (e) {
+                      console.error('Demo trigger failed:', e);
+                    }
+                  }}
+                  style={{
+                    background: '#111', border: '1px solid #1e1e1e', color: '#888',
+                    padding: '4px 10px', fontSize: '10px', cursor: 'pointer',
+                    letterSpacing: '0.06em', fontFamily: "'JetBrains Mono', monospace",
+                    transition: 'border-color 100ms, color 100ms',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = '#333'; e.currentTarget.style.color = '#fff'; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = '#1e1e1e'; e.currentTarget.style.color = '#888'; }}
+                >
+                  {t}
+                </button>
+              ))}
+              <input
+                id="demo-ticker-input"
+                type="text"
+                placeholder="CUSTOM"
+                style={{
+                  background: '#080808', border: '1px solid #1e1e1e', color: '#fff',
+                  padding: '4px 8px', fontSize: '10px', width: '70px',
+                  fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.06em',
+                  textTransform: 'uppercase',
+                }}
+                onKeyDown={async (e) => {
+                  if (e.key === 'Enter' && e.target.value.trim()) {
+                    try {
+                      const form = document.getElementById('demo-form-select')?.value || '8-K';
+                      await axios.post(`${API}/demo/trigger`, { ticker: e.target.value.trim().toUpperCase(), form });
+                      e.target.value = '';
+                    } catch (err) {
+                      console.error('Demo trigger failed:', err);
+                    }
+                  }
+                }}
+              />
+            </div>
+          </div>
+        );
+      })()}
+
       <div style={{
         display: 'grid',
         gridTemplateColumns: '1fr 260px',

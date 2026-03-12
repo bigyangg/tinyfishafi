@@ -2,9 +2,9 @@
 
 ## Overview
 
-AFI (Market Event Intelligence) is a real-time signal platform for traders. It polls SEC EDGAR for 8-K filings, classifies market events with Google Gemini 2.5 Flash, enriches with price data and news sentiment, scores impact (0–100), and delivers structured signals through a live dashboard, Telegram alerts, browser push notifications, and email digests.
+AFI (Market Event Intelligence) is a real-time signal platform for traders. It polls SEC EDGAR continuously, detects new filings (8-K, 10-K, 10-Q, 4, SC 13D), classifies market events with Gemini 2.5 Flash, applies 5-stage governance validation, enriches with price data, scores impact (0–100), and delivers structured signals through a live dashboard, Telegram alerts, and server-sent events (SSE) logs.
 
-**Current state:** Phase 5 complete. Categorized feed with accordion sections (EARNINGS, LEADERSHIP, REGULATORY, ROUTINE), multi-page architecture (AppShell, Dashboard, Watchlist, Signal, Settings), compact 3-column AlertCard, polished right panel with bordered cards, and FeedSummaryBar with category pills.
+**Current state:** Phase 6 Final Architecture complete. Includes multi-form processors, rigorous JSON governance to prevent AI hallucinations, real-time pipeline log streaming via SSE, an automated demo trigger endpoint, full audit trail UI (chain of thought, key facts, governance checks, impact breakdown), and an updated "Intelligence Pipeline" landing page.
 
 ---
 
@@ -12,7 +12,7 @@ AFI (Market Event Intelligence) is a real-time signal platform for traders. It p
 
 ```
 FastAPI (port 8001) <-> Supabase (PostgreSQL + Auth + Realtime)
-EDGAR Agent (120s loop) -> SEC EDGAR -> Signal Pipeline -> Supabase -> Telegram
+EDGAR Agent (120s loop) -> SEC EDGAR -> Multi-Form Pipeline -> Governance Validation -> Score -> Store -> Alert
 Text Extraction: TinyFish -> SEC EFTS full-text -> HTTP scrape (follow_redirects)
 Ticker Resolution: CIK -> data.sec.gov/submissions/CIK{padded}.json -> ticker
 Signal Pipeline: Classify (Gemini) -> Taxonomy -> Enrich (Yahoo) -> Score -> Store -> Alert
@@ -27,23 +27,26 @@ All backend routes use the `/api/` prefix.
 ## Key Files
 
 ### Backend — Core
-- `server.py` - FastAPI app. Auth, signal/watchlist CRUD, agent control, config management, signal correction endpoint, price correlation endpoint, **ticker search proxy** (`/api/ticker/search`). Auto-starts EDGAR agent on boot.
-- `edgar_agent.py` - Autonomous 8-K poller. 120-second interval. **3-step text extraction fallback** (TinyFish -> SEC EFTS -> HTTP scrape). **CIK-to-ticker resolution** via SEC submissions API. Delegates to SignalPipeline. Configurable Telegram threshold (`TELEGRAM_IMPACT_THRESHOLD`). Integrates price tracker.
-- `telegram_bot.py` - Smart Telegram alerts. `should_send_telegram()` with multi-factor thresholds: always alerts watchlist tickers, confidence >= 60 for Positive/Risk, impact >= 55. Rich HTML format with company name, event labels, EDGAR links. `send_signal_alert(data, is_watched)` adds watched indicator.
+- `server.py` - FastAPI app. Signal/watchlist CRUD, SSE stream (`/api/logs/stream`), demo trigger (`/api/demo/trigger`), agent control. Auto-starts EDGAR agent and wires SSE queue to pipeline on boot.
+- `edgar_agent.py` - Autonomous SEC poller. Multi-form support (8-K, 10-K, 10-Q, 4, SC 13D). **3-step extraction fallback** (TinyFish -> SEC EFTS -> HTTP scrape). Emits logs to SSE stream. delegates to SignalPipeline.
+- `telegram_bot.py` - Smart Telegram alerts with multi-factor thresholds. Supports inline links without HTML symbol errors.
 
-### Backend — Pipeline (Phase 3)
-- `signal_pipeline.py` - Core orchestrator. Registry pattern: `register_processor(type, processor)`. Routes: Classify -> Taxonomy -> Enrich -> Score -> Store. `EightKProcessor` uses Gemini. **Per-step error handling** with context logging (accession, filing type, company). New filing types plug in via one new class + registration.
-- `event_classifier.py` - Deterministic taxonomy mapper. Maps Gemini output to fixed event types (EARNINGS_BEAT, EXEC_DEPARTURE, etc.). Extracts 8-K item numbers. No API calls.
-- `market_data.py` - Yahoo Finance (yfinance) wrapper. 5-minute TTL in-memory cache for prices and news. 2s timeout. Returns None on failure.
+### Backend — Pipeline (Phase 6 Final)
+- `signal_pipeline.py` - Core orchestrator. Event-driven via Registry pattern: `register_processor(type, processor)`. Routes: Classify -> Governance -> Enrich -> Score -> Store.
+- `processors/` - Contains multi-form Gemini prompts. `form_8k.py`, `form_10k.py`, `form_10q.py`, `form_4.py`, `form_sc13d.py`.
+- `governance.py` - 5 validation checks: `CONFIDENCE_FLOOR`, `NEWS_DIVERGENCE`, `KEY_FACTS_PRESENT`, `EVENT_SIGNAL_CONSISTENCY`, `JUNK_FILTER`. Creates audit_trail JSON.
+- `event_classifier.py` - Deterministic taxonomy mapper for legacy processing.
+- `market_data.py` - Yahoo Finance wrapper. 5-minute TTL cache.
 - `sentiment_analyzer.py` - Option A: filing signal vs current news tone. Keyword-based scoring. Returns delta, news score, match boolean.
 - `impact_engine.py` - Rule-based composite scoring: 40% confidence + 30% event weight + 20% sentiment + 10% watchlist boost. `should_alert()` used by Telegram gate.
 - `price_tracker.py` - Scheduled T+1h/T+24h/T+3d price checks. Database rows, not asyncio.sleep. Survives restarts.
 
 ### Frontend
-- `App.js` - Client-side routing: `/`, `/dashboard`, `/watchlist`, `/signal/:id`, `/settings`.
-- `AppShell.jsx` - Shared layout shell with sidebar navigation and agent status bar.
-- `Dashboard.jsx` - Categorized signal feed. `CATEGORY_MAP` groups signals into EARNINGS & FINANCIAL, LEADERSHIP & CORP EVENTS, REGULATORY & LEGAL, ROUTINE FILINGS. `CategorySection` accordion with sticky headers, SHOW/HIDE toggle, collapsed ticker previews, and count badges. `FeedSummaryBar` with category pills in header. Priority sorting: watched → signal type → impact → date. Ghost/junk filtering. Right panel: `TodayStats` (bordered cards), `TopSignals` (mini-cards with colored borders and impact-colored scores), `MarketBrief` (AI summary in bordered card), `WatchlistZone`.
-- `AlertCard.jsx` - Compact 3-column grid card: ticker+event | summary+company | time+watch+impact bar. Supports `dimmed` prop for routine filings. 4px border-radius, visible borders.
+- `App.js` - Client-side routing: `/`, `/dashboard`, `/watchlist`, `/signal/:id`, `/settings`, `/logs`.
+- `AppShell.jsx` - Shared layout shell with sidebar navigation, agent status bar, and LOGS link conditionally rendered based on `?demo=true`.
+- `Dashboard.jsx` - Categorized feed. `CATEGORY_MAP` handles 6 groups. `CategorySection` accordion headers. Top panel includes `?demo=true` triggers for TSLA, NVDA etc.
+- `Logs.jsx` - Live terminal-like SSE viewer connecting to `/api/logs/stream`. Color coded by pipeline step.
+- `Signal.jsx` - Deep-dive audit trail. Renders Chain of Thought dictionary, Key Facts, Governance checkboxes, Impact Score table, and Form Data grid.
 - `Watchlist.jsx` - Watchlist management with inline filing expand. Clicking a filing opens `/signal/:id` in new tab.
 - `Signal.jsx` - Individual signal detail page. Fetches via `GET /api/signals/:id`.
 - `Settings.jsx` - User settings page.
@@ -66,8 +69,8 @@ All backend routes use the `/api/` prefix.
 ## Data Model
 
 ### signals table
-`id` (UUID), `ticker`, `company`, `filing_type`, `signal` (Positive/Neutral/Risk/Pending), `confidence` (INT 0-100), `summary`, `accession_number` (unique), `filed_at`, `created_at`
-**Phase 3 columns:** `event_type`, `filing_subtype`, `sentiment_delta` (REAL), `news_sentiment_score` (REAL), `sentiment_match` (BOOL), `impact_score` (INT), `user_correction`, `correction_count` (INT), `config_version_at_classification` (INT)
+`id` (UUID), `ticker`, `company`, `filing_type` (8-K, 10-K, etc), `signal` (Positive/Neutral/Risk/Pending), `confidence` (INT 0-100), `summary`, `accession_number` (unique), `filed_at`, `created_at`
+**Phase 6 Audit Columns:** `chain_of_thought` (JSONB), `governance_audit` (JSONB), `impact_breakdown` (JSONB), `news_headlines` (JSONB), `news_sentiment` (TEXT), `divergence_type` (TEXT), `key_facts` (JSONB), `form_data` (JSONB), `extraction_source` (TEXT), `extraction_time_ms` (INT).
 
 API maps: `signal` -> `classification`, `company` -> `company_name` via `format_signal_for_api()`.
 

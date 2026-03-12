@@ -1,10 +1,12 @@
 # server.py — AFI Backend (FastAPI + Supabase)
-# Purpose: Auth, signals, watchlist, EDGAR agent control, health, telegram test, AI brief
+# Purpose: Auth, signals, watchlist, EDGAR agent control, health, telegram test, AI brief, SSE logs
 # Dependencies: fastapi, supabase, pyjwt, httpx, google-generativeai
 # Env vars: SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, CORS_ORIGINS
 
+import asyncio
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from supabase import create_client, Client
@@ -140,6 +142,16 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # ============ SIGNAL HELPERS ============
 def format_signal_for_api(row):
     """Convert Supabase row to API response format (map column names)."""
+    def _parse_json(val):
+        if val is None:
+            return None
+        if isinstance(val, (dict, list)):
+            return val
+        try:
+            return json.loads(val)
+        except Exception:
+            return val
+
     result = {
         "id": row.get("id", ""),
         "ticker": row.get("ticker", ""),
@@ -158,6 +170,17 @@ def format_signal_for_api(row):
         "sentiment_delta": row.get("sentiment_delta"),
         "sentiment_match": row.get("sentiment_match"),
         "user_correction": row.get("user_correction"),
+        # Phase 6 audit trail fields
+        "chain_of_thought": _parse_json(row.get("chain_of_thought")),
+        "governance_audit": _parse_json(row.get("governance_audit")),
+        "impact_breakdown": _parse_json(row.get("impact_breakdown")),
+        "news_headlines": _parse_json(row.get("news_headlines")),
+        "news_sentiment": row.get("news_sentiment"),
+        "divergence_type": row.get("divergence_type"),
+        "key_facts": _parse_json(row.get("key_facts")),
+        "form_data": _parse_json(row.get("form_data")),
+        "extraction_source": row.get("extraction_source"),
+        "extraction_time_ms": row.get("extraction_time_ms"),
     }
     return result
 
@@ -352,6 +375,174 @@ async def edgar_fetch_company(data: ManualFetch):
     if result.get("status") == "not_found":
         raise HTTPException(status_code=404, detail=result.get("message"))
     return result
+
+# ============ DEMO TRIGGER ============
+class DemoTrigger(BaseModel):
+    ticker: str
+
+@api_router.post("/demo/trigger")
+async def trigger_demo_signal(body: dict):
+    """Fire real pipeline on any ticker's latest SEC filing."""
+    import time
+    import asyncio
+    import httpx
+    from signal_pipeline import SignalPipeline, RawFiling, pipeline_log
+
+    ticker = body.get("ticker", "TSLA").upper()
+    target_form = body.get("form", "8-K").upper()
+    # Normalize form type names
+    form_aliases = {"FORM4": "4", "FORM 4": "4", "SC13D": "SC 13D", "10K": "10-K", "10Q": "10-Q", "8K": "8-K"}
+    target_form = form_aliases.get(target_form, target_form)
+    
+    pipeline_log("DEMO", f"Demo trigger started for {ticker} [{target_form}]")
+
+    try:
+        # Step 1: Get CIK from SEC company tickers
+        async with httpx.AsyncClient() as client:
+            ticker_resp = await client.get(
+                "https://www.sec.gov/files/company_tickers.json",
+                headers={"User-Agent": "AFI demo@afi.com"},
+                timeout=10,
+            )
+
+        tickers_data = ticker_resp.json()
+        cik = None
+        entity_name = ticker
+        for entry in tickers_data.values():
+            if entry.get("ticker", "").upper() == ticker:
+                cik = str(entry["cik_str"]).zfill(10)
+                entity_name = entry.get("title", ticker)
+                break
+
+        if not cik:
+            pipeline_log("DEMO", f"Could not resolve CIK for {ticker}", "error")
+            return {"error": f"Could not resolve CIK for {ticker}"}
+
+        pipeline_log("DEMO", f"Resolved {ticker} -> CIK {cik} ({entity_name})")
+
+        # Step 2: Get most recent filing of target type from submissions
+        async with httpx.AsyncClient() as client:
+            sub_resp = await client.get(
+                f"https://data.sec.gov/submissions/CIK{cik}.json",
+                headers={"User-Agent": "AFI demo@afi.com"},
+                timeout=10,
+            )
+
+        sub_data = sub_resp.json()
+        filings = sub_data.get("filings", {}).get("recent", {})
+        forms       = filings.get("form", [])
+        accessions  = filings.get("accessionNumber", [])
+        dates       = filings.get("filingDate", [])
+        primary_docs = filings.get("primaryDocument", [])
+
+        latest_filing = None
+        for i, form in enumerate(forms):
+            if form == target_form or form.startswith(target_form):
+                acc_clean = accessions[i].replace("-", "")
+                acc_dashes = accessions[i]
+                latest_filing = {
+                    "accession_clean":  acc_clean,
+                    "accession_dashes": acc_dashes,
+                    "date":             dates[i],
+                    "cik":              str(int(cik)),
+                    "primary_doc":      primary_docs[i] if i < len(primary_docs) else "",
+                    "form":             form,
+                }
+                break
+
+        if not latest_filing:
+            pipeline_log("DEMO", f"No {target_form} filings found for {ticker}", "error")
+            return {"error": f"No {target_form} filings found for {ticker}"}
+
+        # Step 3: Build filing URL and fetch text
+        cik_clean = str(int(cik))
+        filing_url = (
+            f"https://www.sec.gov/Archives/edgar/data/"
+            f"{cik_clean}/{latest_filing['accession_clean']}/"
+            f"{latest_filing['accession_dashes']}-index.htm"
+        )
+        
+        # Try to fetch filing text
+        filing_text = None
+        if latest_filing["primary_doc"]:
+            doc_url = (
+                f"https://www.sec.gov/Archives/edgar/data/"
+                f"{cik_clean}/{latest_filing['accession_clean']}/"
+                f"{latest_filing['primary_doc']}"
+            )
+            try:
+                async with httpx.AsyncClient() as client:
+                    doc_resp = await client.get(
+                        doc_url,
+                        headers={"User-Agent": "AFI demo@afi.com"},
+                        timeout=15,
+                    )
+                if doc_resp.status_code == 200:
+                    filing_text = doc_resp.text[:15000]
+                    pipeline_log("TINYFISH", f"Fetched {len(filing_text)} chars of {target_form} text")
+            except Exception:
+                pipeline_log("TINYFISH", "Could not fetch filing text, proceeding with metadata only", "warning")
+
+        actual_form = latest_filing["form"]
+        pipeline_log("DEMO", f"Found {actual_form} filed {latest_filing['date']}: {filing_url}")
+
+        # Step 4: Run REAL pipeline
+        demo_accession = f"demo_{latest_filing['accession_dashes']}_{int(time.time())}"
+
+        raw_filing = RawFiling(
+            accession_number=demo_accession,
+            filing_type=actual_form,
+            company_name=entity_name,
+            entity_id=cik_clean,
+            filed_at=latest_filing["date"] + "T09:00:00Z",
+            filing_url=filing_url,
+            filing_text=filing_text,
+        )
+
+        # Process in background thread so endpoint returns immediately
+        async def _run_pipeline():
+            try:
+                pipe = SignalPipeline(supabase)
+                signal = pipe.process(raw_filing)
+                if signal:
+                    row = pipe.signal_to_db_row(signal)
+                    supabase.table("signals").insert(row).execute()
+                    pipeline_log("PIPELINE", f"Demo signal stored: {signal.ticker} [{signal.signal}]", "success")
+                else:
+                    pipeline_log("PIPELINE", f"Pipeline returned no signal for {ticker}", "warning")
+            except Exception as e:
+                pipeline_log("PIPELINE", f"Demo pipeline error: {e}", "error")
+
+        asyncio.create_task(_run_pipeline())
+
+        return {
+            "status":      "triggered",
+            "ticker":      ticker,
+            "company":     entity_name,
+            "filing_date": latest_filing["date"],
+            "filing_url":  filing_url,
+            "message":     f"Pipeline running for {ticker}. Signal appears in ~30s.",
+        }
+
+    except Exception as e:
+        pipeline_log("DEMO", f"Demo trigger failed: {e}", "error")
+        return {"error": str(e)}
+
+# ============ SSE LOG STREAM ============
+log_queue = asyncio.Queue()
+
+@api_router.get("/logs/stream")
+async def stream_logs():
+    """Server-Sent Events endpoint for live pipeline logs."""
+    async def generate():
+        while True:
+            try:
+                entry = await asyncio.wait_for(log_queue.get(), timeout=30)
+                yield f"data: {json.dumps(entry)}\n\n"
+            except asyncio.TimeoutError:
+                yield f"data: {json.dumps({'type': 'ping'})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 # ============ AGENT CONFIG ============
 @api_router.get("/config")
@@ -599,6 +790,14 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     global edgar_agent_instance
+
+    # Step 0: Wire up SSE log queue to pipeline
+    try:
+        from signal_pipeline import set_log_queue
+        set_log_queue(log_queue)
+        logger.info("SSE log queue connected to pipeline")
+    except Exception as e:
+        logger.warning(f"Failed to connect SSE log queue: {e}")
 
     # Step 1: Clean seed data
     await cleanup_seed_data()

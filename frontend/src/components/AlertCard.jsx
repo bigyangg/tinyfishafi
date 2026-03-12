@@ -1,5 +1,14 @@
-// AlertCard.jsx — Compact 3-column card for categorized feed
+// AlertCard.jsx — Enhanced card with filing type badge and confidence display
 import { useState, useEffect } from 'react';
+
+// Filing type colors
+const FORM_COLORS = {
+  '8-K': { bg: '#0066FF15', border: '#0066FF40', text: '#0066FF' },
+  '10-K': { bg: '#F59E0B15', border: '#F59E0B40', text: '#F59E0B' },
+  '10-Q': { bg: '#00C80515', border: '#00C80540', text: '#00C805' },
+  '4': { bg: '#A855F715', border: '#A855F740', text: '#A855F7' },
+  'SC 13D': { bg: '#FF6B0015', border: '#FF6B0040', text: '#FF6B00' },
+};
 
 export default function AlertCard({ signal, isWatched, onToggleWatch, onClick, isNew, dimmed }) {
   // Live relative timestamps
@@ -19,7 +28,17 @@ export default function AlertCard({ signal, isWatched, onToggleWatch, onClick, i
 
   const eventLabel = signal.event_type && signal.event_type !== 'ROUTINE_ADMIN'
     ? signal.event_type.replace(/_/g, ' ')
-    : 'Admin 8-K';
+    : null;
+
+  const filingType = signal.filing_type || '8-K';
+  const formStyle = FORM_COLORS[filingType] || FORM_COLORS['8-K'];
+  const confidence = signal.confidence || 0;
+
+  // Confidence color
+  const confColor = confidence >= 80 ? '#00C805'
+    : confidence >= 60 ? '#FFB300'
+      : confidence >= 40 ? '#FF6B00'
+        : '#FF3333';
 
   return (
     <div
@@ -28,7 +47,7 @@ export default function AlertCard({ signal, isWatched, onToggleWatch, onClick, i
       data-testid={`alert-card-${signal.id}`}
       style={{
         display: 'grid',
-        gridTemplateColumns: '90px 1fr auto',
+        gridTemplateColumns: '100px 1fr auto',
         alignItems: 'start',
         gap: '12px',
         padding: '12px 16px',
@@ -44,9 +63,9 @@ export default function AlertCard({ signal, isWatched, onToggleWatch, onClick, i
       onMouseEnter={e => { e.currentTarget.style.background = '#111'; e.currentTarget.style.borderColor = '#1e1e1e'; if (dimmed) e.currentTarget.style.opacity = '0.75'; }}
       onMouseLeave={e => { e.currentTarget.style.background = '#0a0a0a'; e.currentTarget.style.borderColor = '#141414'; if (dimmed) e.currentTarget.style.opacity = '0.55'; }}
     >
-      {/* LEFT: Ticker + event */}
+      {/* LEFT: Ticker + filing type badge + event */}
       <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
           <span style={{
             fontWeight: 700,
             fontSize: '13px',
@@ -59,8 +78,32 @@ export default function AlertCard({ signal, isWatched, onToggleWatch, onClick, i
             <div style={{ width: '4px', height: '4px', borderRadius: '50%', background: '#0066FF', flexShrink: 0 }} />
           )}
         </div>
-        <div style={{ fontSize: '9px', color: '#2a2a2a', letterSpacing: '0.04em' }}>
-          {eventLabel}
+
+        {/* Filing type badge */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
+          <span style={{
+            fontSize: '8px',
+            fontWeight: 700,
+            letterSpacing: '0.08em',
+            color: formStyle.text,
+            background: formStyle.bg,
+            border: `1px solid ${formStyle.border}`,
+            padding: '1px 5px',
+            borderRadius: '2px',
+            fontFamily: "'JetBrains Mono', monospace",
+          }}>
+            {filingType}
+          </span>
+          {eventLabel && (
+            <span style={{
+              fontSize: '8px',
+              color: '#333',
+              letterSpacing: '0.04em',
+              textTransform: 'capitalize',
+            }}>
+              {eventLabel.toLowerCase()}
+            </span>
+          )}
         </div>
       </div>
 
@@ -83,8 +126,28 @@ export default function AlertCard({ signal, isWatched, onToggleWatch, onClick, i
         </div>
       </div>
 
-      {/* RIGHT: Score + time + watch */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px', minWidth: '56px' }}>
+      {/* RIGHT: Confidence + time + watch */}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px', minWidth: '60px' }}>
+        {/* Confidence score */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <span style={{
+            fontSize: '14px',
+            fontWeight: 700,
+            color: dimmed ? '#222' : confColor,
+            fontFamily: "'JetBrains Mono', monospace",
+            letterSpacing: '-0.02em',
+          }}>
+            {confidence > 0 ? confidence : '—'}
+          </span>
+          <span style={{
+            fontSize: '7px',
+            color: '#222',
+            letterSpacing: '0.06em',
+          }}>
+            /100
+          </span>
+        </div>
+
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <span style={{ fontSize: '10px', color: '#222' }}>
             {signal.filed_at
@@ -117,11 +180,12 @@ export default function AlertCard({ signal, isWatched, onToggleWatch, onClick, i
         {/* Impact bar */}
         {(signal.impact_score || 0) > 0 && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <div style={{ width: '28px', height: '1px', background: '#111' }}>
+            <div style={{ width: '28px', height: '2px', background: '#111', borderRadius: '1px' }}>
               <div style={{
                 height: '100%',
                 width: `${signal.impact_score}%`,
                 background: impactColor,
+                borderRadius: '1px',
               }} />
             </div>
             <span style={{ fontSize: '9px', color: impactColor, minWidth: '16px', textAlign: 'right' }}>

@@ -294,9 +294,9 @@ export default function Landing() {
       }}>
         {[
           { value: "<2min", label: "DETECTION SPEED" },
-          { value: "8-K", label: "FILING COVERAGE" },
+          { value: "5 Forms", label: "SEC FILING COVERAGE" },
           { value: "0-100", label: "IMPACT SCORE" },
-          { value: "24/7", label: "SEC MONITORING" },
+          { value: "24/7", label: "MARKET MONITORING" },
         ].map(({ value, label }) => (
           <div key={label} style={{
             background: "#080808",
@@ -313,136 +313,87 @@ export default function Landing() {
         ))}
       </div>
 
-      {/* ── HOW IT WORKS ── */}
+      {/* ── REFINED HOW IT WORKS / INTELLIGENCE PIPELINE ── */}
       <div
         id="how-it-works"
         style={{
           position: "relative",
           zIndex: 1,
-          maxWidth: "860px",
+          maxWidth: "1000px",
           margin: "0 auto 120px",
           padding: "0 24px",
         }}
       >
-        {/* Section label */}
-        <div style={{
-          textAlign: "center",
-          marginBottom: "56px",
-        }}>
-          <div style={{
-            display: "inline-block",
-            fontSize: "9px",
-            color: "#333",
-            letterSpacing: "0.2em",
-            marginBottom: "16px",
-            textTransform: "uppercase",
-          }}>
-            HOW IT WORKS
-          </div>
+        <div style={{ textAlign: "center", marginBottom: "50px" }}>
           <h2 style={{
-            margin: 0,
-            fontSize: "clamp(22px, 3.5vw, 36px)",
-            fontWeight: 700,
+            fontSize: "clamp(24px, 4vw, 36px)",
+            fontWeight: 800,
             color: "#fff",
             letterSpacing: "-0.02em",
             fontFamily: "'JetBrains Mono', monospace",
-            lineHeight: 1.2,
+            margin: "0 0 16px 0",
           }}>
-            SEC Filing to Your Phone
+            The Intelligence Pipeline
           </h2>
           <p style={{
-            margin: "10px 0 0",
-            fontSize: "11px",
-            color: "#2a2a2a",
-            letterSpacing: "0.08em",
+            color: "#666",
+            fontSize: "14px",
+            maxWidth: "500px",
+            margin: "0 auto",
+            lineHeight: 1.6,
           }}>
-            in under 2 minutes
+            Proprietary infrastructure designed for professional market
+            participants who require an information edge.
           </p>
         </div>
 
-        {/* 4 step cards — uniform grid */}
         <div style={{
           display: "grid",
-          gridTemplateColumns: "repeat(4, 1fr)",
-          gap: "1px",
-          background: "#111",
+          gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+          gap: "24px",
         }}>
           {[
-            {
-              step: "01",
-              title: "DETECT",
-              desc: "EDGAR queried every 120s. New 8-K filings captured within 2 minutes of SEC publication.",
-              color: "#0066FF",
-            },
-            {
-              step: "02",
-              title: "CLASSIFY",
-              desc: "Gemini 2.5 Flash reads the filing. Event type mapped: EARNINGS, EXEC CHANGE, M&A, LEGAL.",
-              color: "#FFB300",
-            },
-            {
-              step: "03",
-              title: "SCORE",
-              desc: "Impact score 0–100 from confidence, event weight, sentiment alignment, and watchlist priority.",
-              color: "#FF6B00",
-            },
-            {
-              step: "04",
-              title: "ALERT",
-              desc: "Signal hits your dashboard instantly. Telegram fires in seconds. Email digest at 4PM daily.",
-              color: "#00C805",
-            },
-          ].map(({ step, title, desc, color }, i) => (
-            <div
-              key={step}
-              style={{
-                background: "#080808",
-                padding: "28px 22px 28px",
-                borderTop: `1px solid ${color}`,
-                display: "flex",
-                flexDirection: "column",
-                gap: "10px",
-                transition: "background 150ms",
-              }}
-              onMouseEnter={e => e.currentTarget.style.background = "#0d0d0d"}
-              onMouseLeave={e => e.currentTarget.style.background = "#080808"}
+            { phase: "01", title: "DETECT", desc: "Direct connection to global regulatory feeds including SEC EDGAR." },
+            { phase: "02", title: "ANALYZE", desc: "Large Language Models extract material changes from complex legal and financial text." },
+            { phase: "03", title: "GOVERNANCE", desc: "5-stage validation framework prevents hallucinations and ensures factual accuracy." },
+            { phase: "04", title: "SCORE", desc: "Quantitative correlation against historical data to assign impact confidence." },
+            { phase: "05", title: "ALERT", desc: "Instant delivery via Webhook, Telegram, or our native Professional Terminal." },
+          ].map((s, i) => (
+            <div key={i} style={{
+              background: "#080808",
+              border: "1px solid #1a1a1a",
+              padding: "24px",
+              borderRadius: "4px",
+              transition: "border-color 200ms, background-color 200ms",
+            }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = "#333"; e.currentTarget.style.backgroundColor = "#0d0d0d"; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = "#1a1a1a"; e.currentTarget.style.backgroundColor = "#080808"; }}
             >
-              {/* Step number */}
-              <span style={{
-                fontFamily: "'JetBrains Mono', monospace",
+              <div style={{
                 fontSize: "10px",
-                fontWeight: 600,
-                color: color,
-                letterSpacing: "0.1em",
+                fontWeight: 700,
+                color: "#555",
+                marginBottom: "20px",
+                letterSpacing: "0.2em",
               }}>
-                {step}
-              </span>
-
-              {/* Title */}
-              <span style={{
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: "11px",
+                PHASE {s.phase}
+              </div>
+              <h3 style={{
+                fontSize: "16px",
                 fontWeight: 700,
                 color: "#fff",
-                letterSpacing: "0.12em",
+                margin: "0 0 12px 0",
+                letterSpacing: "0.05em",
               }}>
-                {title}
-              </span>
-
-              {/* Divider */}
-              <div style={{ width: "20px", height: "1px", background: "#1a1a1a" }} />
-
-              {/* Description */}
+                {s.title}
+              </h3>
               <p style={{
+                fontSize: "12px",
+                color: "#666",
+                lineHeight: 1.6,
                 margin: 0,
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: "10px",
-                color: "#444",
-                lineHeight: 1.75,
-                fontWeight: 400,
-                letterSpacing: "0.02em",
               }}>
-                {desc}
+                {s.desc}
               </p>
             </div>
           ))}
@@ -558,7 +509,7 @@ export default function Landing() {
         }
       `}</style>
 
-    </div>
+    </div >
   );
 }
 

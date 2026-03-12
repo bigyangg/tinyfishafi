@@ -25,9 +25,12 @@ TINYFISH_BASE_URL = "https://api.tinyfish.io"
 EDGAR_USER_AGENT = "AFI-Bot/1.0 (afi@tinyfish.io)"
 TELEGRAM_IMPACT_THRESHOLD = int(os.environ.get("TELEGRAM_IMPACT_THRESHOLD", "40"))
 
+# All filing types to monitor
+FORMS_TO_MONITOR = ["8-K", "10-K", "10-Q", "4", "SC 13D"]
+
 
 class EdgarAgent:
-    """Polls SEC EDGAR for new 8-K filings and delegates to SignalPipeline."""
+    """Polls SEC EDGAR for new filings (8-K, 10-K, 10-Q, Form 4, SC 13D) and delegates to SignalPipeline."""
 
     def __init__(self, supabase_client):
         self.supabase = supabase_client
@@ -206,6 +209,12 @@ class EdgarAgent:
                 self._load_config()
                 self._load_watchlist_tickers()
                 
+                try:
+                    from signal_pipeline import pipeline_log
+                    pipeline_log("AGENT", f"Poll cycle started")
+                except Exception:
+                    pass
+                
                 logger.info("--- EDGAR POLL CYCLE START ---")
                 self._poll_edgar()
                 logger.info("--- EDGAR POLL CYCLE COMPLETE ---")
@@ -214,7 +223,7 @@ class EdgarAgent:
             self._stop_event.wait(self.poll_interval)
 
     def _poll_edgar(self):
-        """Query EDGAR for new 8-K filings."""
+        """Query EDGAR for new filings across all monitored form types."""
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         # Reset daily counter
@@ -222,20 +231,21 @@ class EdgarAgent:
             self._today_date = today
             self.filings_processed_today = 0
 
-        logger.info(f"[POLL] Querying EDGAR for 8-K filings on {today}")
+        forms_str = ",".join(FORMS_TO_MONITOR)
+        logger.info(f"[POLL] Querying EDGAR for [{forms_str}] filings on {today}")
 
         # Try multiple EDGAR API approaches
         filings = []
 
-        # Approach 1: EFTS full-text search
+        # Approach 1: EFTS full-text search (all form types)
         try:
             logger.info("[POLL] Trying EFTS full-text search...")
             with httpx.Client(timeout=30, headers={"User-Agent": EDGAR_USER_AGENT}) as client:
                 response = client.get(
                     "https://efts.sec.gov/LATEST/search-index",
                     params={
-                        "q": '"8-K"',
-                        "forms": "8-K",
+                        "q": '*',
+                        "forms": forms_str,
                         "dateRange": "custom",
                         "startdt": today,
                         "enddt": today,
@@ -260,7 +270,8 @@ class EdgarAgent:
                     response = client.get(
                         "https://efts.sec.gov/LATEST/search-index",
                         params={
-                            "q": '"8-K"',
+                            "q": '*',
+                            "forms": forms_str,
                             "dateRange": "custom",
                             "startdt": today,
                             "enddt": today,
@@ -277,45 +288,54 @@ class EdgarAgent:
             except Exception as e:
                 logger.warning(f"[POLL] Full-text search failed: {e}")
 
-        # Approach 3: EDGAR recent filings RSS/JSON
+        # Approach 3: EDGAR recent filings RSS/JSON (per form type)
         if not filings:
-            try:
-                logger.info("[POLL] Trying EDGAR recent filings feed...")
-                with httpx.Client(timeout=30, headers={"User-Agent": EDGAR_USER_AGENT}) as client:
-                    response = client.get(
-                        "https://www.sec.gov/cgi-bin/browse-edgar",
-                        params={
-                            "action": "getcurrent",
-                            "type": "8-K",
-                            "dateb": "",
-                            "owner": "include",
-                            "count": "20",
-                            "search_text": "",
-                            "output": "atom",
-                        },
-                    )
-                    if response.status_code == 200:
-                        entries = re.findall(r'<accession-number>(.*?)</accession-number>', response.text)
-                        company_names = re.findall(r'<company-name>(.*?)</company-name>', response.text)
-                        ciks = re.findall(r'<cik>(.*?)</cik>', response.text)
-                        for i, acc in enumerate(entries[:20]):
-                            filings.append({
-                                "accession_no": acc,
-                                "entity_name": company_names[i] if i < len(company_names) else "Unknown",
-                                "entity_id": ciks[i] if i < len(ciks) else "",
-                                "file_date": today,
-                            })
-                        logger.info(f"[POLL] RSS feed returned {len(filings)} results")
-                    else:
-                        logger.warning(f"[POLL] RSS feed returned HTTP {response.status_code}")
-            except Exception as e:
-                logger.warning(f"[POLL] RSS feed failed: {e}")
+            for form_type in FORMS_TO_MONITOR:
+                try:
+                    logger.info(f"[POLL] Trying EDGAR RSS feed for {form_type}...")
+                    with httpx.Client(timeout=30, headers={"User-Agent": EDGAR_USER_AGENT}) as client:
+                        response = client.get(
+                            "https://www.sec.gov/cgi-bin/browse-edgar",
+                            params={
+                                "action": "getcurrent",
+                                "type": form_type,
+                                "dateb": "",
+                                "owner": "include",
+                                "count": "10",
+                                "search_text": "",
+                                "output": "atom",
+                            },
+                        )
+                        if response.status_code == 200:
+                            entries = re.findall(r'<accession-number>(.*?)</accession-number>', response.text)
+                            company_names = re.findall(r'<company-name>(.*?)</company-name>', response.text)
+                            ciks = re.findall(r'<cik>(.*?)</cik>', response.text)
+                            form_types_found = re.findall(r'<form-type>(.*?)</form-type>', response.text)
+                            for i, acc in enumerate(entries[:10]):
+                                filings.append({
+                                    "accession_no": acc,
+                                    "entity_name": company_names[i] if i < len(company_names) else "Unknown",
+                                    "entity_id": ciks[i] if i < len(ciks) else "",
+                                    "file_date": today,
+                                    "form_type": form_types_found[i] if i < len(form_types_found) else form_type,
+                                })
+                            logger.info(f"[POLL] RSS feed for {form_type} returned {len(entries[:10])} results")
+                        else:
+                            logger.warning(f"[POLL] RSS feed for {form_type} returned HTTP {response.status_code}")
+                except Exception as e:
+                    logger.warning(f"[POLL] RSS feed for {form_type} failed: {e}")
 
         self.last_poll_time = datetime.now(timezone.utc)
 
         if not filings:
             logger.info("[POLL] No filings found across all search methods. This is normal outside market hours.")
             return
+
+        try:
+            from signal_pipeline import pipeline_log
+            pipeline_log("EDGAR", f"Found {len(filings)} new filings")
+        except Exception:
+            pass
 
         logger.info(f"[POLL] Processing {min(len(filings), 20)} of {len(filings)} filings...")
 
@@ -402,11 +422,20 @@ class EdgarAgent:
 
         # --- PIPELINE INTEGRATION ---
         if self._pipeline:
-            from signal_pipeline import RawFiling
+            from signal_pipeline import RawFiling, pipeline_log
+            
+            # Detect filing type from source data
+            filing_type = source.get("form_type", source.get("filing_type", "8-K"))
+            # Normalize form type names
+            filing_type_map = {"8-K": "8-K", "10-K": "10-K", "10-Q": "10-Q", "4": "4", "SC 13D": "SC 13D", "SC 13D/A": "SC 13D"}
+            filing_type = filing_type_map.get(filing_type, filing_type)
+            
+            pipeline_log("PIPELINE", f"Processing {resolved_ticker or 'UNKNOWN'} {filing_type}")
+            pipeline_log("TINYFISH", "Extracting SEC document...")
             
             raw_filing = RawFiling(
                 accession_number=accession_number,
-                filing_type="8-K",
+                filing_type=filing_type,
                 company_name=company_name,
                 entity_id=str(entity_id),
                 filed_at=filed_at,

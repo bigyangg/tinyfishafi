@@ -70,10 +70,13 @@ export default function AppShell({ children }) {
         navigate('/');
     };
 
+    const isDemo = typeof window !== 'undefined' && window.location.search.includes('demo=true');
+
     const navItems = [
         { to: '/dashboard', label: 'FEED', icon: '◈' },
         { to: '/watchlist', label: 'WATCHLIST', icon: '◎' },
         { to: '/settings', label: 'SETTINGS', icon: '⊙' },
+        ...(isDemo ? [{ to: '/logs', label: 'LOGS', icon: '⊡' }] : []),
     ];
 
     return (
