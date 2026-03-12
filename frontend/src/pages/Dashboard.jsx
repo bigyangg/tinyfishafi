@@ -767,6 +767,33 @@ export default function Dashboard() {
     } catch { setBrief('Unable to load market brief.'); }
     finally { setBriefLoading(false); }
   }, []);
+  // SSE pipeline log stream (for demo mode)
+  useEffect(() => {
+    if (!window.location.search.includes('demo=true')) return;
+    const LOG_COLORS = { success: '#00C805', error: '#FF3333', warning: '#FFB300', info: '#555' };
+    let es;
+    try {
+      es = new EventSource(`${API}/logs/stream`);
+      es.onmessage = (evt) => {
+        try {
+          const entry = JSON.parse(evt.data);
+          if (entry.type === 'ping') return;
+          const logEl = document.getElementById('demo-pipeline-log');
+          if (!logEl) return;
+          const color = LOG_COLORS[entry.level] || '#444';
+          const step = entry.step || '';
+          const msg = entry.message || '';
+          const line = document.createElement('div');
+          line.innerHTML = `<span style="color:${color}">[${step}]</span> <span style="color:#666">${msg}</span>`;
+          logEl.appendChild(line);
+          // Keep last 20 lines
+          while (logEl.children.length > 20) logEl.removeChild(logEl.firstChild);
+          logEl.scrollTop = logEl.scrollHeight;
+        } catch { }
+      };
+    } catch { }
+    return () => { if (es) es.close(); };
+  }, []);
 
   // FIX 1: Parallel initial load with FIX 3 + 9 caching
   useEffect(() => {
@@ -995,114 +1022,7 @@ export default function Dashboard() {
 
   return (
     <AppShell>
-      {/* DEMO PANEL — visible when ?demo=true in URL */}
-      {window.location.search.includes('demo=true') && (() => {
-        const [demoForm, setDemoForm] = window.__demoForm || [null, null];
-        // Use a simple approach: store selected form in a data attribute on the panel
-        return (
-          <div style={{
-            background: '#0a0a0a',
-            borderBottom: '1px solid #111',
-            padding: '10px 16px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '8px',
-            flexShrink: 0,
-          }}>
-            {/* Row 1: Form type selector */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ fontSize: '9px', color: '#555', letterSpacing: '0.1em', fontWeight: 700 }}>DEMO</span>
-              {[
-                { label: '8-K', form: '8-K', color: '#0066FF' },
-                { label: '10-K', form: '10-K', color: '#F59E0B' },
-                { label: '10-Q', form: '10-Q', color: '#00C805' },
-                { label: 'FORM 4', form: '4', color: '#A855F7' },
-                { label: 'SC 13D', form: 'SC 13D', color: '#FF6B00' },
-              ].map(f => {
-                const isActive = (document.getElementById('demo-form-select')?.value || '8-K') === f.form;
-                return (
-                  <button
-                    key={f.form}
-                    onClick={() => {
-                      const el = document.getElementById('demo-form-select');
-                      if (el) el.value = f.form;
-                      // Force re-render of buttons by toggling a class
-                      document.querySelectorAll('[data-form-btn]').forEach(btn => {
-                        btn.style.borderColor = '#1a1a1a';
-                        btn.style.color = '#444';
-                      });
-                      const thisBtn = document.querySelector(`[data-form-btn="${f.form}"]`);
-                      if (thisBtn) { thisBtn.style.borderColor = f.color; thisBtn.style.color = f.color; }
-                    }}
-                    data-form-btn={f.form}
-                    style={{
-                      background: '#080808',
-                      border: `1px solid ${f.form === '8-K' ? f.color : '#1a1a1a'}`,
-                      color: f.form === '8-K' ? f.color : '#444',
-                      padding: '3px 8px', fontSize: '9px', cursor: 'pointer',
-                      letterSpacing: '0.06em', fontFamily: "'JetBrains Mono', monospace",
-                      transition: 'border-color 100ms, color 100ms',
-                      borderRadius: '2px',
-                    }}
-                  >
-                    {f.label}
-                  </button>
-                );
-              })}
-              <input type="hidden" id="demo-form-select" defaultValue="8-K" />
-            </div>
 
-            {/* Row 2: Ticker buttons */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-              {['TSLA', 'NVDA', 'AAPL', 'MSFT', 'AMZN', 'COIN'].map(t => (
-                <button
-                  key={t}
-                  onClick={async () => {
-                    try {
-                      const form = document.getElementById('demo-form-select')?.value || '8-K';
-                      await axios.post(`${API}/demo/trigger`, { ticker: t, form });
-                    } catch (e) {
-                      console.error('Demo trigger failed:', e);
-                    }
-                  }}
-                  style={{
-                    background: '#111', border: '1px solid #1e1e1e', color: '#888',
-                    padding: '4px 10px', fontSize: '10px', cursor: 'pointer',
-                    letterSpacing: '0.06em', fontFamily: "'JetBrains Mono', monospace",
-                    transition: 'border-color 100ms, color 100ms',
-                  }}
-                  onMouseEnter={e => { e.currentTarget.style.borderColor = '#333'; e.currentTarget.style.color = '#fff'; }}
-                  onMouseLeave={e => { e.currentTarget.style.borderColor = '#1e1e1e'; e.currentTarget.style.color = '#888'; }}
-                >
-                  {t}
-                </button>
-              ))}
-              <input
-                id="demo-ticker-input"
-                type="text"
-                placeholder="CUSTOM"
-                style={{
-                  background: '#080808', border: '1px solid #1e1e1e', color: '#fff',
-                  padding: '4px 8px', fontSize: '10px', width: '70px',
-                  fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.06em',
-                  textTransform: 'uppercase',
-                }}
-                onKeyDown={async (e) => {
-                  if (e.key === 'Enter' && e.target.value.trim()) {
-                    try {
-                      const form = document.getElementById('demo-form-select')?.value || '8-K';
-                      await axios.post(`${API}/demo/trigger`, { ticker: e.target.value.trim().toUpperCase(), form });
-                      e.target.value = '';
-                    } catch (err) {
-                      console.error('Demo trigger failed:', err);
-                    }
-                  }
-                }}
-              />
-            </div>
-          </div>
-        );
-      })()}
 
       <div style={{
         display: 'grid',
@@ -1196,6 +1116,108 @@ export default function Dashboard() {
           background: '#050505',
           overflowY: 'auto',
         }}>
+          {/* SMART DEMO PANEL (Sidebar) */}
+          {window.location.search.includes('demo=true') && (
+            <div style={{
+              background: '#0a0a0a',
+              borderBottom: '1px solid #111',
+              padding: '16px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px',
+            }}>
+              <div>
+                <div style={{ fontSize: '10px', color: '#555', letterSpacing: '0.1em', fontWeight: 700, marginBottom: '2px' }}>SMART TRIGGER</div>
+                <div style={{ fontSize: '8px', color: '#333' }}>Click to run all 5 form types</div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
+                {['TSLA', 'NVDA', 'AAPL', 'MSFT', 'AMZN', 'COIN'].map(t => (
+                  <button
+                    key={t}
+                    id={`demo-btn-${t}`}
+                    onClick={async (e) => {
+                      const btn = e.currentTarget;
+                      btn.style.background = '#0066FF15';
+                      btn.style.borderColor = '#0066FF';
+                      btn.style.color = '#0066FF';
+                      btn.textContent = `${t}...`;
+                      try {
+                        const res = await axios.post(`${API}/demo/trigger-all`, { ticker: t });
+                        const forms = res.data?.forms_found?.length || 0;
+                        btn.textContent = `${t} (${forms})`;
+                        btn.style.color = '#00C805';
+                        btn.style.borderColor = '#00C80540';
+                        setTimeout(() => {
+                          btn.textContent = t;
+                          btn.style.background = '#111';
+                          btn.style.borderColor = '#1e1e1e';
+                          btn.style.color = '#888';
+                        }, 5000);
+                      } catch (e) {
+                        btn.textContent = `ERR`;
+                        btn.style.color = '#FF3333';
+                        console.error('Demo trigger failed:', e);
+                      }
+                    }}
+                    style={{
+                      background: '#111', border: '1px solid #1e1e1e', color: '#888',
+                      padding: '6px 0', fontSize: '10px', cursor: 'pointer',
+                      letterSpacing: '0.06em', fontFamily: "'JetBrains Mono', monospace",
+                      transition: 'background 100ms, border-color 100ms, color 100ms',
+                      textAlign: 'center', borderRadius: '3px'
+                    }}
+                    onMouseEnter={e => { if (e.currentTarget.style.color === 'rgb(136, 136, 136)') { e.currentTarget.style.borderColor = '#333'; e.currentTarget.style.color = '#fff'; } }}
+                    onMouseLeave={e => { if (e.currentTarget.style.color === 'rgb(255, 255, 255)') { e.currentTarget.style.borderColor = '#1e1e1e'; e.currentTarget.style.color = '#888'; } }}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+
+              <input
+                id="demo-ticker-input"
+                type="text"
+                placeholder="CUSTOM TICKER"
+                style={{
+                  background: '#080808', border: '1px solid #1e1e1e', color: '#fff',
+                  padding: '6px 8px', fontSize: '10px', width: '100%',
+                  fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.06em',
+                  textTransform: 'uppercase', borderRadius: '3px', boxSizing: 'border-box'
+                }}
+                onKeyDown={async (e) => {
+                  if (e.key === 'Enter' && e.target.value.trim()) {
+                    try {
+                      await axios.post(`${API}/demo/trigger-all`, { ticker: e.target.value.trim().toUpperCase() });
+                      e.target.value = '';
+                    } catch (err) {
+                      console.error('Demo trigger failed:', err);
+                    }
+                  }
+                }}
+              />
+
+              <div
+                id="demo-pipeline-log"
+                style={{
+                  background: '#050505',
+                  border: '1px solid #111',
+                  borderRadius: '3px',
+                  padding: '8px 10px',
+                  minHeight: '120px',
+                  maxHeight: '200px',
+                  overflowY: 'auto',
+                  fontSize: '9px',
+                  fontFamily: "'JetBrains Mono', monospace",
+                  color: '#444',
+                  lineHeight: 1.6,
+                }}
+              >
+                <span style={{ color: '#222' }}>Waiting for pipeline events...</span>
+              </div>
+            </div>
+          )}
+
           {signalsLoading ? <StatsSkeleton /> : <TodayStats signals={displayedSignals} />}
           <TopSignals signals={cleanSignals} watchlist={watchlist} />
           <MarketBrief brief={brief} isGenerating={briefLoading} briefAge={briefAge} />

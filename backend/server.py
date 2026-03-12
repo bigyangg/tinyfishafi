@@ -528,6 +528,160 @@ async def trigger_demo_signal(body: dict):
         pipeline_log("DEMO", f"Demo trigger failed: {e}", "error")
         return {"error": str(e)}
 
+
+@api_router.post("/demo/trigger-all")
+async def trigger_all_forms(body: dict):
+    """Smart demo: run ALL filing types for a ticker in one click."""
+    import time
+    import asyncio
+    import httpx
+    from signal_pipeline import SignalPipeline, RawFiling, pipeline_log
+
+    ticker = body.get("ticker", "TSLA").upper()
+    ALL_FORMS = ["8-K", "10-K", "10-Q", "4", "SC 13D"]
+
+    pipeline_log("DEMO", f"Smart trigger started for {ticker} — scanning all {len(ALL_FORMS)} form types")
+
+    try:
+        # Step 1: Resolve CIK
+        async with httpx.AsyncClient() as client:
+            ticker_resp = await client.get(
+                "https://www.sec.gov/files/company_tickers.json",
+                headers={"User-Agent": "AFI demo@afi.com"},
+                timeout=10,
+            )
+        tickers_data = ticker_resp.json()
+        cik = None
+        entity_name = ticker
+        for entry in tickers_data.values():
+            if entry.get("ticker", "").upper() == ticker:
+                cik = str(entry["cik_str"]).zfill(10)
+                entity_name = entry.get("title", ticker)
+                break
+
+        if not cik:
+            pipeline_log("DEMO", f"Could not resolve CIK for {ticker}", "error")
+            return {"error": f"Could not resolve CIK for {ticker}"}
+
+        pipeline_log("DEMO", f"Resolved {ticker} -> CIK {cik} ({entity_name})")
+
+        # Step 2: Fetch submissions
+        async with httpx.AsyncClient() as client:
+            sub_resp = await client.get(
+                f"https://data.sec.gov/submissions/CIK{cik}.json",
+                headers={"User-Agent": "AFI demo@afi.com"},
+                timeout=10,
+            )
+        sub_data = sub_resp.json()
+        filings = sub_data.get("filings", {}).get("recent", {})
+        forms_list    = filings.get("form", [])
+        accessions    = filings.get("accessionNumber", [])
+        dates         = filings.get("filingDate", [])
+        primary_docs  = filings.get("primaryDocument", [])
+
+        # Step 3: Find latest of each form type
+        found_forms = {}
+        for target_form in ALL_FORMS:
+            for i, form in enumerate(forms_list):
+                if form == target_form or form.startswith(target_form):
+                    if target_form not in found_forms:
+                        found_forms[target_form] = {
+                            "accession_clean":  accessions[i].replace("-", ""),
+                            "accession_dashes": accessions[i],
+                            "date":             dates[i],
+                            "cik":              str(int(cik)),
+                            "primary_doc":      primary_docs[i] if i < len(primary_docs) else "",
+                            "form":             form,
+                        }
+                        break
+
+        pipeline_log("DEMO", f"Found {len(found_forms)}/{len(ALL_FORMS)} form types: {', '.join(found_forms.keys())}")
+
+        # Step 4: Process each form type in background
+        cik_clean = str(int(cik))
+        results = []
+
+        async def _process_form(form_key, filing_info):
+            try:
+                actual_form = filing_info["form"]
+                pipeline_log("DEMO", f"[{ticker}] Processing {actual_form} filed {filing_info['date']}...")
+
+                filing_url = (
+                    f"https://www.sec.gov/Archives/edgar/data/"
+                    f"{cik_clean}/{filing_info['accession_clean']}/"
+                    f"{filing_info['accession_dashes']}-index.htm"
+                )
+
+                # Fetch text
+                filing_text = None
+                if filing_info["primary_doc"]:
+                    doc_url = (
+                        f"https://www.sec.gov/Archives/edgar/data/"
+                        f"{cik_clean}/{filing_info['accession_clean']}/"
+                        f"{filing_info['primary_doc']}"
+                    )
+                    try:
+                        async with httpx.AsyncClient() as client:
+                            doc_resp = await client.get(
+                                doc_url,
+                                headers={"User-Agent": "AFI demo@afi.com"},
+                                timeout=15,
+                            )
+                        if doc_resp.status_code == 200:
+                            filing_text = doc_resp.text[:15000]
+                            pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] Fetched {len(filing_text)} chars")
+                    except Exception:
+                        pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] Could not fetch text", "warning")
+
+                demo_accession = f"demo_{filing_info['accession_dashes']}_{int(time.time())}"
+
+                raw_filing = RawFiling(
+                    accession_number=demo_accession,
+                    filing_type=actual_form,
+                    company_name=entity_name,
+                    entity_id=cik_clean,
+                    filed_at=filing_info["date"] + "T09:00:00Z",
+                    filing_url=filing_url,
+                    filing_text=filing_text,
+                )
+
+                pipeline_log("PIPELINE", f"[{ticker}/{actual_form}] Classifying with Gemini...")
+                pipe = SignalPipeline(supabase)
+                signal = pipe.process(raw_filing)
+
+                if signal:
+                    row = pipe.signal_to_db_row(signal)
+                    supabase.table("signals").insert(row).execute()
+                    pipeline_log("PIPELINE", f"[{ticker}/{actual_form}] {signal.signal} (conf {signal.confidence}) — {signal.summary[:60]}", "success")
+                    return {"form": actual_form, "signal": signal.signal, "confidence": signal.confidence, "event_type": signal.event_type}
+                else:
+                    pipeline_log("PIPELINE", f"[{ticker}/{actual_form}] No signal produced", "warning")
+                    return {"form": actual_form, "signal": None}
+
+            except Exception as e:
+                pipeline_log("PIPELINE", f"[{ticker}/{form_key}] Error: {e}", "error")
+                return {"form": form_key, "error": str(e)}
+
+        async def _run_all():
+            for form_key, filing_info in found_forms.items():
+                result = await _process_form(form_key, filing_info)
+                results.append(result)
+            pipeline_log("DEMO", f"[{ticker}] All done — {len(results)} forms processed", "success")
+
+        asyncio.create_task(_run_all())
+
+        return {
+            "status":     "triggered",
+            "ticker":     ticker,
+            "company":    entity_name,
+            "forms_found": list(found_forms.keys()),
+            "message":    f"Processing {len(found_forms)} form types for {ticker}. Watch the pipeline logs.",
+        }
+
+    except Exception as e:
+        pipeline_log("DEMO", f"Smart trigger failed: {e}", "error")
+        return {"error": str(e)}
+
 # ============ SSE LOG STREAM ============
 log_queue = asyncio.Queue()
 

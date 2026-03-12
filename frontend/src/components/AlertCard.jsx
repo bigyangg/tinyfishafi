@@ -34,11 +34,10 @@ export default function AlertCard({ signal, isWatched, onToggleWatch, onClick, i
   const formStyle = FORM_COLORS[filingType] || FORM_COLORS['8-K'];
   const confidence = signal.confidence || 0;
 
-  // Confidence color
-  const confColor = confidence >= 80 ? '#00C805'
-    : confidence >= 60 ? '#FFB300'
-      : confidence >= 40 ? '#FF6B00'
-        : '#FF3333';
+  // Confidence color matches signal classification
+  const confColor = signal.classification === 'Positive' ? '#00C805'
+    : signal.classification === 'Risk' ? '#FF3333'
+      : '#555';
 
   return (
     <div
