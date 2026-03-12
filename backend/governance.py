@@ -134,6 +134,8 @@ def run_governance(
         "no matching ticker", "not an 8-k filing", "no filing content",
         "system message", "cannot analyze", "unable to provide",
         "provided text indicates", "ai classification failed",
+        "agent is analyzing", "processing filing", "i cannot",
+        "as an ai", "no information", "filing does not",
     ]
     summary_lower = summary.lower()
     is_junk = any(p in summary_lower for p in junk_patterns)

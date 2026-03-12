@@ -106,7 +106,7 @@ export default function AlertCard({ signal, isWatched, onToggleWatch, onClick, i
         </div>
       </div>
 
-      {/* CENTER: Summary + company */}
+      {/* CENTER: Summary + company + intelligence */}
       <div>
         <p style={{
           margin: 0,
@@ -123,6 +123,53 @@ export default function AlertCard({ signal, isWatched, onToggleWatch, onClick, i
         <div style={{ marginTop: '5px', fontSize: '9px', color: '#1e1e1e' }}>
           {signal.company_name || signal.company || ''}
         </div>
+
+        {/* WHY line — first key fact */}
+        {signal.key_facts?.[0] && (
+          <div style={{
+            marginTop: '5px', fontSize: '9px', fontFamily: "'JetBrains Mono', monospace",
+            display: 'flex', gap: '6px'
+          }}>
+            <span style={{ color: '#0066FF', flexShrink: 0 }}>WHY</span>
+            <span style={{ color: '#2a2a2a' }}>{signal.key_facts[0]}</span>
+          </div>
+        )}
+
+        {/* News divergence badge */}
+        {signal.news_sentiment && !signal.sentiment_match && (
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', gap: '5px',
+            padding: '2px 7px', marginTop: '5px',
+            background: '#FF6B0010', border: '1px solid #FF6B0030', borderRadius: '2px'
+          }}>
+            <span style={{
+              fontSize: '8px', color: '#FF6B00',
+              fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.1em'
+            }}>
+              NEWS DIVERGENCE
+            </span>
+          </div>
+        )}
+
+        {/* Insider transaction amounts (Form 4) */}
+        {['INSIDER_BUY', 'INSIDER_SELL'].includes(signal.event_type)
+          && signal.form_data?.insider && (
+            <div style={{
+              marginTop: '8px', display: 'flex', gap: '16px',
+              padding: '7px 10px', background: '#060606', border: '1px solid #0d0d0d', borderRadius: '3px'
+            }}>
+              {[
+                { l: 'TYPE', v: signal.form_data.insider.transaction_type === 'Purchase' ? 'BOUGHT' : 'SOLD', c: '#A855F7' },
+                { l: 'VALUE', v: `$${((signal.form_data.insider.total_value_usd || 0) / 1e6).toFixed(1)}M`, c: '#fff' },
+                { l: 'ROLE', v: signal.form_data.insider.role || '—', c: '#888' },
+              ].map(({ l, v, c }) => (
+                <div key={l}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: c, fontFamily: "'JetBrains Mono', monospace" }}>{v}</div>
+                  <div style={{ fontSize: '8px', color: '#1e1e1e' }}>{l}</div>
+                </div>
+              ))}
+            </div>
+          )}
       </div>
 
       {/* RIGHT: Confidence + time + watch */}

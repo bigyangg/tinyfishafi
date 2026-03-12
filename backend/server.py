@@ -320,6 +320,25 @@ async def ticker_search(q: str = ""):
     except Exception:
         return {"results": []}
 
+# ============ TINYFISH EXTRACTION STATS ============
+_tf_stats = {"total": 0, "success": 0}
+
+def record_tinyfish_call(success: bool):
+    """Track TinyFish extraction call outcomes."""
+    _tf_stats["total"] += 1
+    if success:
+        _tf_stats["success"] += 1
+
+@api_router.get("/tinyfish/stats")
+async def tinyfish_stats():
+    """Return TinyFish extraction statistics."""
+    t = _tf_stats["total"]
+    return {
+        "total_extractions": t,
+        "successful": _tf_stats["success"],
+        "success_rate": round(_tf_stats["success"] / max(t, 1), 2),
+    }
+
 # ============ EDGAR AGENT CONTROL ============
 edgar_agent_instance = None
 

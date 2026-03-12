@@ -711,12 +711,19 @@ export default function Dashboard() {
   const [watchlist, setWatchlist] = useState(() => loadWatchlistCache() || []);
   const [signalsLoading, setSignalsLoading] = useState(() => !loadCache(SIGNAL_CACHE_KEY));
   const [watchlistLoading, setWatchlistLoading] = useState(() => !loadWatchlistCache());
+  const [feedFilter, setFeedFilter] = useState('ALL');
   // Demo panel autocomplete state
   const [demoQuery, setDemoQuery] = useState('');
   const [demoResults, setDemoResults] = useState([]);
   const [demoSearching, setDemoSearching] = useState(false);
   const [selectedSignal, setSelectedSignal] = useState(null);
   const [newSignalIds, setNewSignalIds] = useState(new Set());
+
+  // Demo mode — stable check, never re-reads URL
+  const isDemoMode = useMemo(
+    () => new URLSearchParams(window.location.search).has('demo'),
+    []
+  );
 
   // Browser push notifications
   const { requestPermission, notifyNewSignal } = usePushNotifications();
@@ -772,7 +779,7 @@ export default function Dashboard() {
   }, []);
   // SSE pipeline log stream (for demo mode)
   useEffect(() => {
-    if (!window.location.search.includes('demo=true')) return;
+    if (!isDemoMode) return;
     const LOG_COLORS = { success: '#00C805', error: '#FF3333', warning: '#FFB300', info: '#555' };
     let es;
     try {
@@ -1120,7 +1127,7 @@ export default function Dashboard() {
           overflowY: 'auto',
         }}>
           {/* SMART DEMO PANEL (Sidebar) */}
-          {window.location.search.includes('demo=true') && (
+          {isDemoMode && (
             <div style={{
               background: '#0a0a0a',
               borderBottom: '1px solid #111',
