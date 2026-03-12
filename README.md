@@ -414,11 +414,12 @@ Constraint: UNIQUE(user_id, ticker). Maximum 10 tickers per user.
 - 10-K annual report processor with revenue trend and audit analysis
 - 10-Q quarterly earnings processor with beat/miss detection
 - SC 13D activist filing processor with intent classification
-- Multi-form demo trigger endpoint (`POST /api/demo/trigger`)
+- Smart demo trigger sidebar (`POST /api/demo/trigger-all`) with live SSE pipeline logs
 - Filing type color badges and confidence scores on AlertCard
 - 7-category dashboard feed (Earnings, Insider, Activist, Leadership, Annual, Legal, Routine)
 - Gemini SDK migrated from `google.generativeai` to `google.genai`
 - Dashboard signal polling replaced with Supabase Realtime subscription
+- Instant dashboard rendering via localStorage caching
 
 ### Phase 7: Enterprise (Planned)
 - S-1 IPO filing support via plugin processor

@@ -43,8 +43,8 @@ All backend routes use the `/api/` prefix.
 
 ### Frontend
 - `App.js` - Client-side routing: `/`, `/dashboard`, `/watchlist`, `/signal/:id`, `/settings`, `/logs`.
-- `AppShell.jsx` - Shared layout shell with sidebar navigation, agent status bar, and LOGS link conditionally rendered based on `?demo=true`.
-- `Dashboard.jsx` - Categorized feed. `CATEGORY_MAP` handles 6 groups. `CategorySection` accordion headers. Top panel includes `?demo=true` triggers for TSLA, NVDA etc.
+- `AppShell.jsx` - Shared layout shell with sidebar navigation, agent status bar.
+- `Dashboard.jsx` - Categorized feed. `CATEGORY_MAP` handles 7 groups. `CategorySection` accordion headers. **Instant rendering via localStorage cache**. Right sidebar includes the **Smart Demo Trigger panel** (fires all 5 form types with live SSE log viewer).
 - `Logs.jsx` - Live terminal-like SSE viewer connecting to `/api/logs/stream`. Color coded by pipeline step.
 - `Signal.jsx` - Deep-dive audit trail. Renders Chain of Thought dictionary, Key Facts, Governance checkboxes, Impact Score table, and Form Data grid.
 - `Watchlist.jsx` - Watchlist management with inline filing expand. Clicking a filing opens `/signal/:id` in new tab.
