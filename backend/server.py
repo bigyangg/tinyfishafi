@@ -663,9 +663,23 @@ async def trigger_all_forms(body: dict):
                 return {"form": form_key, "error": str(e)}
 
         async def _run_all():
+            from telegram_bot import send_telegram_alert
             for form_key, filing_info in found_forms.items():
                 result = await _process_form(form_key, filing_info)
                 results.append(result)
+                
+                # Push notification to TG for demo events if a signal was found
+                if result.get("signal"):
+                    try:
+                        pipeline_log("DEMO", f"[{ticker}] Pushing to Telegram...")
+                        # Fetch the completed signal from DB to pass to the bot
+                        resp = supabase.table("signals").select("*").eq("ticker", ticker).eq("classification", result["signal"]).order("created_at", desc=True).limit(1).execute()
+                        if resp.data:
+                            # Use existing should_alert wrapper logic
+                            await send_telegram_alert(resp.data[0])
+                    except Exception as e:
+                        pipeline_log("DEMO", f"[{ticker}] Telegram push failed: {e}", "warning")
+                        
             pipeline_log("DEMO", f"[{ticker}] All done — {len(results)} forms processed", "success")
 
         asyncio.create_task(_run_all())

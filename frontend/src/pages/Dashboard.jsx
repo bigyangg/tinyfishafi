@@ -707,11 +707,14 @@ export default function Dashboard() {
   const { user, authHeaders, logout } = useAuth();
   const navigate = useNavigate();
   // FIX 3 & 9: Init from cache instantly
-  const [allSignals, setAllSignals] = useState(() => loadCache(SIGNAL_CACHE_KEY, SIGNAL_CACHE_TTL) || []);
-  const [watchlist, setWatchlist] = useState(() => loadWatchlistCache());
-  const [signalsLoading, setSignalsLoading] = useState(() => !loadCache(SIGNAL_CACHE_KEY, SIGNAL_CACHE_TTL));
-  const [watchlistLoading, setWatchlistLoading] = useState(() => loadWatchlistCache().length === 0);
-  const [feedFilter, setFeedFilter] = useState('ALL');
+  const [allSignals, setAllSignals] = useState(() => loadCache(SIGNAL_CACHE_KEY) || []);
+  const [watchlist, setWatchlist] = useState(() => loadWatchlistCache() || []);
+  const [signalsLoading, setSignalsLoading] = useState(() => !loadCache(SIGNAL_CACHE_KEY));
+  const [watchlistLoading, setWatchlistLoading] = useState(() => !loadWatchlistCache());
+  // Demo panel autocomplete state
+  const [demoQuery, setDemoQuery] = useState('');
+  const [demoResults, setDemoResults] = useState([]);
+  const [demoSearching, setDemoSearching] = useState(false);
   const [selectedSignal, setSelectedSignal] = useState(null);
   const [newSignalIds, setNewSignalIds] = useState(new Set());
 
@@ -1175,27 +1178,77 @@ export default function Dashboard() {
                 ))}
               </div>
 
-              <input
-                id="demo-ticker-input"
-                type="text"
-                placeholder="CUSTOM TICKER"
-                style={{
-                  background: '#080808', border: '1px solid #1e1e1e', color: '#fff',
-                  padding: '6px 8px', fontSize: '10px', width: '100%',
-                  fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.06em',
-                  textTransform: 'uppercase', borderRadius: '3px', boxSizing: 'border-box'
-                }}
-                onKeyDown={async (e) => {
-                  if (e.key === 'Enter' && e.target.value.trim()) {
-                    try {
-                      await axios.post(`${API}/demo/trigger-all`, { ticker: e.target.value.trim().toUpperCase() });
-                      e.target.value = '';
-                    } catch (err) {
-                      console.error('Demo trigger failed:', err);
+              <div style={{ position: 'relative' }}>
+                <input
+                  id="demo-ticker-input"
+                  type="text"
+                  placeholder="CUSTOM TICKER"
+                  value={demoQuery}
+                  onChange={(e) => {
+                    const val = e.target.value.toUpperCase();
+                    setDemoQuery(val);
+                    if (!val.trim()) { setDemoResults([]); return; }
+                    setDemoSearching(true);
+                    axios.get(`${API}/ticker/search?q=${encodeURIComponent(val)}`)
+                      .then(res => setDemoResults(res.data.results || [{ ticker: val, name: val }]))
+                      .catch(() => setDemoResults([{ ticker: val, name: val }]))
+                      .finally(() => setDemoSearching(false));
+                  }}
+                  style={{
+                    background: '#080808', border: '1px solid #1e1e1e', color: '#fff',
+                    padding: '6px 8px', fontSize: '10px', width: '100%',
+                    fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.06em',
+                    textTransform: 'uppercase', borderRadius: '3px', boxSizing: 'border-box'
+                  }}
+                  onKeyDown={async (e) => {
+                    if (e.key === 'Escape') { setDemoQuery(''); setDemoResults([]); }
+                    if (e.key === 'Enter' && demoQuery.trim()) {
+                      try {
+                        await axios.post(`${API}/demo/trigger-all`, { ticker: demoQuery.trim().toUpperCase() });
+                        setDemoQuery('');
+                        setDemoResults([]);
+                      } catch (err) {
+                        console.error('Demo trigger failed:', err);
+                      }
                     }
-                  }
-                }}
-              />
+                  }}
+                  onBlur={() => setTimeout(() => setDemoResults([]), 200)}
+                />
+                {demoSearching && (
+                  <span style={{ position: 'absolute', right: '8px', top: '8px', fontSize: '9px', color: '#444' }}>...</span>
+                )}
+                {demoResults.length > 0 && (
+                  <div style={{
+                    position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10,
+                    background: '#0a0a0a', border: '1px solid #1e1e1e', borderTop: 'none',
+                    borderRadius: '0 0 3px 3px', boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
+                  }}>
+                    {demoResults.slice(0, 4).map((r, i) => (
+                      <div
+                        key={i}
+                        onClick={async () => {
+                          try {
+                            await axios.post(`${API}/demo/trigger-all`, { ticker: r.ticker });
+                            setDemoQuery('');
+                            setDemoResults([]);
+                          } catch (err) {
+                            console.error('Demo trigger failed:', err);
+                          }
+                        }}
+                        style={{
+                          padding: '6px 8px', fontSize: '9px', cursor: 'pointer',
+                          fontFamily: "'JetBrains Mono', monospace", color: '#888',
+                          borderBottom: i < Math.min(demoResults.length, 4) - 1 ? '1px solid #111' : 'none',
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.background = '#111'; e.currentTarget.style.color = '#fff'; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#888'; }}
+                      >
+                        <strong style={{ color: '#ccc' }}>{r.ticker}</strong> - <span style={{ fontFamily: "Inter, sans-serif", fontSize: '9px', color: '#555' }}>{r.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
 
               <div
                 id="demo-pipeline-log"
