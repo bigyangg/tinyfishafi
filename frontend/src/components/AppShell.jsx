@@ -109,49 +109,57 @@ export default function AppShell({ children }) {
             <div style={{
                 gridColumn: '1 / -1',
                 gridRow: '1',
-                borderBottom: '1px solid #0f0f0f',
+                borderBottom: '1px solid #111',
                 display: 'flex',
                 alignItems: 'center',
                 padding: '0 16px',
-                gap: '20px',
-                background: '#050505',
+                gap: '0',
+                background: '#060606',
             }}>
-                {/* Agent dot */}
-                <div style={{
-                    width: '5px', height: '5px',
-                    borderRadius: '50%',
-                    background: agentStatus === 'running' ? '#00C805' : '#FF3333',
-                    animation: agentStatus === 'running' ? 'pulse-green 3s ease-in-out infinite' : 'none',
-                }} />
-                <span style={{ fontSize: '10px', color: '#2a2a2a', letterSpacing: '0.1em' }}>
-                    {agentStatus === 'running' ? 'MONITORING SEC EDGAR' : 'AGENT OFFLINE'}
-                </span>
+                {/* Agent status */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '7px', paddingRight: '16px', borderRight: '1px solid #111' }}>
+                    <div style={{
+                        width: '5px', height: '5px',
+                        borderRadius: '50%',
+                        background: agentStatus === 'running' ? '#27AE60' : '#E74C3C',
+                        animation: agentStatus === 'running' ? 'pulse-green 3s ease-in-out infinite' : 'none',
+                        flexShrink: 0,
+                    }} />
+                    <span style={{ fontSize: '10px', color: agentStatus === 'running' ? '#6FCF97' : '#EB5757', letterSpacing: '0.1em', fontFamily: "'JetBrains Mono', monospace" }}>
+                        {agentStatus === 'running' ? 'MONITORING SEC EDGAR' : 'EDGAR AGENT OFFLINE'}
+                    </span>
+                </div>
 
                 {/* Countdown */}
                 {countdown != null && countdown > 0 && (
-                    <span style={{ fontSize: '10px', color: '#1a1a1a', letterSpacing: '0.06em' }}>
-                        NEXT: {countdown}s
+                    <span style={{ fontSize: '10px', color: '#555', letterSpacing: '0.06em', padding: '0 16px', borderRight: '1px solid #111', fontFamily: "'JetBrains Mono', monospace" }}>
+                        NEXT POLL: {countdown}s
                     </span>
                 )}
 
                 {/* Filed today */}
                 {filedToday > 0 && (
-                    <span style={{ fontSize: '10px', color: '#1a1a1a' }}>
-                        {filedToday} today
+                    <span style={{ fontSize: '10px', color: '#555', fontFamily: "'JetBrains Mono', monospace", padding: '0 16px', borderRight: '1px solid #111' }}>
+                        {filedToday} FILINGS TODAY
                     </span>
                 )}
 
                 <div style={{ flex: 1 }} />
 
-                {/* Backend indicator */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                {/* Backend ONLINE/OFFLINE badge */}
+                <div style={{
+                    display: 'flex', alignItems: 'center', gap: '6px',
+                    padding: '2px 10px',
+                    border: `1px solid ${backendOnline === true ? '#27AE6030' : backendOnline === false ? '#E74C3C30' : '#333'}`,
+                    background: backendOnline === true ? '#27AE6010' : backendOnline === false ? '#E74C3C10' : 'transparent',
+                }}>
                     <div style={{
                         width: '4px', height: '4px',
                         borderRadius: '50%',
-                        background: backendOnline === true ? '#00C805' : backendOnline === false ? '#FF3333' : '#333',
+                        background: backendOnline === true ? '#27AE60' : backendOnline === false ? '#E74C3C' : '#555',
                     }} />
-                    <span style={{ fontSize: '9px', color: '#1e1e1e', letterSpacing: '0.08em' }}>
-                        {backendOnline === true ? 'ONLINE' : backendOnline === false ? 'OFFLINE' : '···'}
+                    <span style={{ fontSize: '9px', color: backendOnline === true ? '#27AE60' : backendOnline === false ? '#E74C3C' : '#555', letterSpacing: '0.12em', fontFamily: "'JetBrains Mono', monospace" }}>
+                        {backendOnline === true ? 'ONLINE' : backendOnline === false ? 'OFFLINE' : '---'}
                     </span>
                 </div>
             </div>
