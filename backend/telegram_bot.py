@@ -228,5 +228,53 @@ def send_test_message():
         return False
 
 
+def send_trigger_summary(ticker: str, company: str, results: list):
+    """
+    Send a comprehensive Telegram summary after a trigger-all run completes.
+    Shows each form processed with its signal, confidence, and event type.
+    """
+    if not TELEGRAM_ENABLED or not BOT_TOKEN or not CHAT_ID:
+        return
+
+    try:
+        successful = [r for r in results if r.get("signal")]
+        failed = [r for r in results if r.get("error")]
+        no_signal = [r for r in results if not r.get("signal") and not r.get("error")]
+
+        # Build per-form lines
+        lines = []
+        for r in results:
+            form = _escape_html(r.get("form", "?"))
+            if r.get("signal"):
+                sig = r["signal"]
+                conf = r.get("confidence", 0)
+                evt = r.get("event_type", "")
+                emoji = SIGNAL_EMOJI.get(sig, "\u26aa")
+                evt_label = EVENT_LABELS.get(evt, evt.replace("_", " ") if evt else "")
+                lines.append(f"  {emoji} <b>{form}</b>: {sig} ({conf}%) \u2014 {_escape_html(evt_label)}")
+            elif r.get("error"):
+                lines.append(f"  \u274c <b>{form}</b>: Error")
+            else:
+                lines.append(f"  \u26aa <b>{form}</b>: No signal")
+
+        detail_block = "\n".join(lines)
+
+        message = (
+            f"\U0001f4ca <b>AFI SIGNAL TRIGGER COMPLETE</b>\n\n"
+            f"<b>{_escape_html(ticker)}</b> \u2014 {_escape_html(company)}\n"
+            f"{len(results)} forms processed\n\n"
+            f"{detail_block}\n\n"
+            f"\u2705 {len(successful)} signals  |  "
+            f"\u26aa {len(no_signal)} skipped  |  "
+            f"\u274c {len(failed)} errors"
+        )
+
+        _send_telegram_message(message, parse_mode="HTML")
+        logger.info(f"Trigger summary sent for {ticker}")
+
+    except Exception as e:
+        logger.error(f"Failed to send trigger summary: {e}")
+
+
 if __name__ == "__main__":
     send_test_message()

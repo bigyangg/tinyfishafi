@@ -115,7 +115,7 @@ export default function Logs() {
                                 Waiting for pipeline events...
                             </p>
                             <p style={{ fontSize: '10px', color: '#1a1a1a', marginTop: '8px' }}>
-                                Trigger a demo signal from the Dashboard to see live logs
+                                Use the Signal Trigger in the sidebar to run a pipeline sweep
                             </p>
                         </div>
                     )}

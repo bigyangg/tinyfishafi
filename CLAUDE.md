@@ -27,7 +27,7 @@ All backend routes use the `/api/` prefix.
 ## Key Files
 
 ### Backend — Core
-- `server.py` - FastAPI app. Signal/watchlist CRUD, SSE stream (`/api/logs/stream`), demo trigger (`/api/demo/trigger`), agent control. Auto-starts EDGAR agent and wires SSE queue to pipeline on boot.
+- `server.py` - FastAPI app. Signal/watchlist CRUD, SSE stream (`/api/logs/stream`), demo triggers (`/api/demo/trigger`, `/api/demo/trigger-all`), TinyFish stats, agent control. Auto-starts EDGAR agent and wires SSE queue to pipeline on boot.
 - `edgar_agent.py` - Autonomous SEC poller. Multi-form support (8-K, 10-K, 10-Q, 4, SC 13D). **3-step extraction fallback** (TinyFish -> SEC EFTS -> HTTP scrape). Emits logs to SSE stream. delegates to SignalPipeline.
 - `telegram_bot.py` - Smart Telegram alerts with multi-factor thresholds. Supports inline links without HTML symbol errors.
 
@@ -46,9 +46,8 @@ All backend routes use the `/api/` prefix.
 - `AppShell.jsx` - Shared layout shell with sidebar navigation, agent status bar.
 - `Dashboard.jsx` - Categorized feed. `CATEGORY_MAP` handles 7 groups. `CategorySection` accordion headers. **Instant rendering via localStorage cache**. Right sidebar includes the **Smart Demo Trigger panel** (fires all 5 form types with live SSE log viewer).
 - `Logs.jsx` - Live terminal-like SSE viewer connecting to `/api/logs/stream`. Color coded by pipeline step.
-- `Signal.jsx` - Deep-dive audit trail. Renders Chain of Thought dictionary, Key Facts, Governance checkboxes, Impact Score table, and Form Data grid.
+- `Signal.jsx` - Deep-dive audit trail. Renders Chain of Thought, Key Facts, Governance checkboxes, Impact Score table, News Cross-Check, and Form Data grid. Fetches via `GET /api/signals/:id`.
 - `Watchlist.jsx` - Watchlist management with inline filing expand. Clicking a filing opens `/signal/:id` in new tab.
-- `Signal.jsx` - Individual signal detail page. Fetches via `GET /api/signals/:id`.
 - `Settings.jsx` - User settings page.
 - `SignalSkeleton.jsx` - Shimmer loading placeholders (SignalSkeleton, StatsSkeleton, WatchlistSkeleton).
 - `WatchlistPanel.jsx` - Ticker management via **backend proxy** (`/api/ticker/search`). Autocomplete dropdown.
@@ -90,7 +89,7 @@ API maps: `signal` -> `classification`, `company` -> `company_name` via `format_
 1. Background: `#050505`, Surface: `#0A0A0A`, Cards: `#0c0c0c`
 2. Accent: `#0066FF` (interactive elements only)
 3. Signals: Positive `#00C805`, Risk `#FF3333`, Neutral `#71717A`
-4. Category colors: Earnings `#00C805`, Leadership `#FF6B00`, Legal `#FF3333`, Routine `#555`
+4. Category colors: Earnings `#00C805`, Insider `#A855F7`, Activist `#0066FF`, Leadership `#FF6B00`, Annual `#F59E0B`, Legal `#FF3333`, Routine `#555`
 5. Border radius: 4px (cards/buttons), 6px (accordion panels), 10px (count badges)
 6. Fonts: Inter (UI), JetBrains Mono (tickers, numbers, timestamps)
 7. Dark mode only. No gradients. Animations capped at 120ms.
@@ -120,22 +119,27 @@ API maps: `signal` -> `classification`, `company` -> `company_name` via `format_
 | GET | /api/config | Agent config (Phase 3) |
 | POST | /api/config | Update agent config (Phase 3) |
 | GET | /api/ticker/search | Yahoo Finance ticker search proxy |
+| POST | /api/demo/trigger | Single form-type demo pipeline trigger |
+| POST | /api/demo/trigger-all | Smart trigger: all 5 form types + TG alerts |
+| GET | /api/tinyfish/stats | TinyFish extraction statistics |
+| GET | /api/signals/{id} | Full signal with audit trail |
 
 ---
 
-## Pipeline Behavior (Phase 3)
+## Pipeline Behavior (Phase 6 Final)
 
 - Filing received -> SignalPipeline.process() orchestrates all steps
-- Step 1: EightKProcessor.classify() calls Gemini 2.5 Flash
+- Step 1: Form-specific processor (8K/10K/10Q/4/SC13D) calls Gemini 2.5 Flash with chain-of-thought
 - Step 2: event_classifier maps to taxonomy (deterministic, ~0ms)
-- Step 3: market_data fetches price + news (cached, 2s timeout)
-- Step 4: sentiment_analyzer compares filing vs news tone (~1ms)
-- Step 5: impact_engine scores composite importance (0-100)
-- Step 6: Store enriched signal in Supabase
-- Step 7: Schedule price checks (T+1h, T+24h, T+3d)
-- Step 8: Alert via Telegram if impact >= threshold
+- Step 3: governance.py runs 5 validation checks (confidence floor, news divergence, key facts, event consistency, junk filter)
+- Step 4: market_data fetches price + news (cached, 2s timeout)
+- Step 5: sentiment_analyzer compares filing vs news tone (~1ms)
+- Step 6: impact_engine scores composite importance (0-100) with governance penalty
+- Step 7: Store enriched signal + audit trail in Supabase
+- Step 8: Schedule price checks (T+1h, T+24h, T+3d)
+- Step 9: Alert via Telegram if impact >= threshold
 
-Registry pattern: `pipeline.register_processor("4", Form4Parser())` to add Form 4 support later.
+Registry pattern: `pipeline.register_processor("4", Form4Processor())` — active for all 5 forms.
 
 ### Error Handling
 
@@ -161,4 +165,6 @@ Log format includes accession number, ticker, filing type, company name, and exc
 
 **Phase 5 (Complete):** Multi-page architecture (AppShell, Dashboard, Watchlist, Signal, Settings). Premium Landing Page redesign with CSS @keyframes, dot-grid background, glassmorphism, glowing lucide-react feature cards. Categorized feed with CATEGORY_MAP (event_type → groups: EARNINGS, LEADERSHIP, REGULATORY, ROUTINE). CategorySection accordion with SHOW/HIDE toggle, collapsed ticker previews, count badges. Compact 3-column AlertCard. Priority sorting (watched → signal → impact → date). Ghost/junk filtering. Polished right panel with bordered stat cards, mini signal cards, AI brief card. Watchlist page with inline filing expand. GET /api/signals/:id endpoint.
 
-**Phase 6 (Planned):** Form 4 XML parser, 10-K/10-Q section extractor, 13D materiality filter, per-user Telegram chat IDs, Pro-tier REST API, Stripe billing.
+**Phase 6 (Complete):** Multi-form architecture: Form 4 insider processor (buy/sell), 10-K annual report processor, 10-Q quarterly earnings (beat/miss), SC 13D activist filing processor. 5-check governance validation with full audit trail. Chain-of-thought AI reasoning. Smart demo trigger (`trigger-all`) with live SSE logs and Telegram alerts. AlertCard intelligence (WHY line, NEWS DIVERGENCE badge, insider transaction details). 7-category feed. TinyFish stats endpoint. localStorage instant rendering. Gemini SDK migration to `google.genai`.
+
+**Phase 7 (Planned):** S-1 IPO filing support, REST API gateway for Pro-tier, per-user Telegram alerts, Stripe billing, white-label API.

@@ -712,18 +712,8 @@ export default function Dashboard() {
   const [signalsLoading, setSignalsLoading] = useState(() => !loadCache(SIGNAL_CACHE_KEY));
   const [watchlistLoading, setWatchlistLoading] = useState(() => !loadWatchlistCache());
   const [feedFilter, setFeedFilter] = useState('ALL');
-  // Demo panel autocomplete state
-  const [demoQuery, setDemoQuery] = useState('');
-  const [demoResults, setDemoResults] = useState([]);
-  const [demoSearching, setDemoSearching] = useState(false);
   const [selectedSignal, setSelectedSignal] = useState(null);
   const [newSignalIds, setNewSignalIds] = useState(new Set());
-
-  // Demo mode — stable check, never re-reads URL
-  const isDemoMode = useMemo(
-    () => new URLSearchParams(window.location.search).has('demo'),
-    []
-  );
 
   // Browser push notifications
   const { requestPermission, notifyNewSignal } = usePushNotifications();
@@ -777,33 +767,7 @@ export default function Dashboard() {
     } catch { setBrief('Unable to load market brief.'); }
     finally { setBriefLoading(false); }
   }, []);
-  // SSE pipeline log stream (for demo mode)
-  useEffect(() => {
-    if (!isDemoMode) return;
-    const LOG_COLORS = { success: '#00C805', error: '#FF3333', warning: '#FFB300', info: '#555' };
-    let es;
-    try {
-      es = new EventSource(`${API}/logs/stream`);
-      es.onmessage = (evt) => {
-        try {
-          const entry = JSON.parse(evt.data);
-          if (entry.type === 'ping') return;
-          const logEl = document.getElementById('demo-pipeline-log');
-          if (!logEl) return;
-          const color = LOG_COLORS[entry.level] || '#444';
-          const step = entry.step || '';
-          const msg = entry.message || '';
-          const line = document.createElement('div');
-          line.innerHTML = `<span style="color:${color}">[${step}]</span> <span style="color:#666">${msg}</span>`;
-          logEl.appendChild(line);
-          // Keep last 20 lines
-          while (logEl.children.length > 20) logEl.removeChild(logEl.firstChild);
-          logEl.scrollTop = logEl.scrollHeight;
-        } catch { }
-      };
-    } catch { }
-    return () => { if (es) es.close(); };
-  }, []);
+
 
   // FIX 1: Parallel initial load with FIX 3 + 9 caching
   useEffect(() => {
@@ -1126,157 +1090,6 @@ export default function Dashboard() {
           background: '#050505',
           overflowY: 'auto',
         }}>
-          {/* SMART DEMO PANEL (Sidebar) */}
-          {isDemoMode && (
-            <div style={{
-              background: '#0a0a0a',
-              borderBottom: '1px solid #111',
-              padding: '16px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '12px',
-            }}>
-              <div>
-                <div style={{ fontSize: '10px', color: '#555', letterSpacing: '0.1em', fontWeight: 700, marginBottom: '2px' }}>SMART TRIGGER</div>
-                <div style={{ fontSize: '8px', color: '#333' }}>Click to run all 5 form types</div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
-                {['TSLA', 'NVDA', 'AAPL', 'MSFT', 'AMZN', 'COIN'].map(t => (
-                  <button
-                    key={t}
-                    id={`demo-btn-${t}`}
-                    onClick={async (e) => {
-                      const btn = e.currentTarget;
-                      btn.style.background = '#0066FF15';
-                      btn.style.borderColor = '#0066FF';
-                      btn.style.color = '#0066FF';
-                      btn.textContent = `${t}...`;
-                      try {
-                        const res = await axios.post(`${API}/demo/trigger-all`, { ticker: t });
-                        const forms = res.data?.forms_found?.length || 0;
-                        btn.textContent = `${t} (${forms})`;
-                        btn.style.color = '#00C805';
-                        btn.style.borderColor = '#00C80540';
-                        setTimeout(() => {
-                          btn.textContent = t;
-                          btn.style.background = '#111';
-                          btn.style.borderColor = '#1e1e1e';
-                          btn.style.color = '#888';
-                        }, 5000);
-                      } catch (e) {
-                        btn.textContent = `ERR`;
-                        btn.style.color = '#FF3333';
-                        console.error('Demo trigger failed:', e);
-                      }
-                    }}
-                    style={{
-                      background: '#111', border: '1px solid #1e1e1e', color: '#888',
-                      padding: '6px 0', fontSize: '10px', cursor: 'pointer',
-                      letterSpacing: '0.06em', fontFamily: "'JetBrains Mono', monospace",
-                      transition: 'background 100ms, border-color 100ms, color 100ms',
-                      textAlign: 'center', borderRadius: '3px'
-                    }}
-                    onMouseEnter={e => { if (e.currentTarget.style.color === 'rgb(136, 136, 136)') { e.currentTarget.style.borderColor = '#333'; e.currentTarget.style.color = '#fff'; } }}
-                    onMouseLeave={e => { if (e.currentTarget.style.color === 'rgb(255, 255, 255)') { e.currentTarget.style.borderColor = '#1e1e1e'; e.currentTarget.style.color = '#888'; } }}
-                  >
-                    {t}
-                  </button>
-                ))}
-              </div>
-
-              <div style={{ position: 'relative' }}>
-                <input
-                  id="demo-ticker-input"
-                  type="text"
-                  placeholder="CUSTOM TICKER"
-                  value={demoQuery}
-                  onChange={(e) => {
-                    const val = e.target.value.toUpperCase();
-                    setDemoQuery(val);
-                    if (!val.trim()) { setDemoResults([]); return; }
-                    setDemoSearching(true);
-                    axios.get(`${API}/ticker/search?q=${encodeURIComponent(val)}`)
-                      .then(res => setDemoResults(res.data.results || [{ ticker: val, name: val }]))
-                      .catch(() => setDemoResults([{ ticker: val, name: val }]))
-                      .finally(() => setDemoSearching(false));
-                  }}
-                  style={{
-                    background: '#080808', border: '1px solid #1e1e1e', color: '#fff',
-                    padding: '6px 8px', fontSize: '10px', width: '100%',
-                    fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.06em',
-                    textTransform: 'uppercase', borderRadius: '3px', boxSizing: 'border-box'
-                  }}
-                  onKeyDown={async (e) => {
-                    if (e.key === 'Escape') { setDemoQuery(''); setDemoResults([]); }
-                    if (e.key === 'Enter' && demoQuery.trim()) {
-                      try {
-                        await axios.post(`${API}/demo/trigger-all`, { ticker: demoQuery.trim().toUpperCase() });
-                        setDemoQuery('');
-                        setDemoResults([]);
-                      } catch (err) {
-                        console.error('Demo trigger failed:', err);
-                      }
-                    }
-                  }}
-                  onBlur={() => setTimeout(() => setDemoResults([]), 200)}
-                />
-                {demoSearching && (
-                  <span style={{ position: 'absolute', right: '8px', top: '8px', fontSize: '9px', color: '#444' }}>...</span>
-                )}
-                {demoResults.length > 0 && (
-                  <div style={{
-                    position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10,
-                    background: '#0a0a0a', border: '1px solid #1e1e1e', borderTop: 'none',
-                    borderRadius: '0 0 3px 3px', boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
-                  }}>
-                    {demoResults.slice(0, 4).map((r, i) => (
-                      <div
-                        key={i}
-                        onClick={async () => {
-                          try {
-                            await axios.post(`${API}/demo/trigger-all`, { ticker: r.ticker });
-                            setDemoQuery('');
-                            setDemoResults([]);
-                          } catch (err) {
-                            console.error('Demo trigger failed:', err);
-                          }
-                        }}
-                        style={{
-                          padding: '6px 8px', fontSize: '9px', cursor: 'pointer',
-                          fontFamily: "'JetBrains Mono', monospace", color: '#888',
-                          borderBottom: i < Math.min(demoResults.length, 4) - 1 ? '1px solid #111' : 'none',
-                        }}
-                        onMouseEnter={e => { e.currentTarget.style.background = '#111'; e.currentTarget.style.color = '#fff'; }}
-                        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#888'; }}
-                      >
-                        <strong style={{ color: '#ccc' }}>{r.ticker}</strong> - <span style={{ fontFamily: "Inter, sans-serif", fontSize: '9px', color: '#555' }}>{r.name}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div
-                id="demo-pipeline-log"
-                style={{
-                  background: '#050505',
-                  border: '1px solid #111',
-                  borderRadius: '3px',
-                  padding: '8px 10px',
-                  minHeight: '120px',
-                  maxHeight: '200px',
-                  overflowY: 'auto',
-                  fontSize: '9px',
-                  fontFamily: "'JetBrains Mono', monospace",
-                  color: '#444',
-                  lineHeight: 1.6,
-                }}
-              >
-                <span style={{ color: '#222' }}>Waiting for pipeline events...</span>
-              </div>
-            </div>
-          )}
 
           {signalsLoading ? <StatsSkeleton /> : <TodayStats signals={displayedSignals} />}
           <TopSignals signals={cleanSignals} watchlist={watchlist} />
