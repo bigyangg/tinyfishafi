@@ -7,6 +7,7 @@ import Watchlist from './pages/Watchlist';
 import Signal from './pages/Signal';
 import Settings from './pages/Settings';
 import Logs from './pages/Logs';
+import Runs from './pages/Runs';
 import './index.css';
 
 const ProtectedRoute = ({ children }) => {
@@ -32,6 +33,7 @@ function App() {
           <Route path="/watchlist" element={<ProtectedRoute><Watchlist /></ProtectedRoute>} />
           <Route path="/signal/:id" element={<ProtectedRoute><Signal /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+          <Route path="/runs" element={<ProtectedRoute><Runs /></ProtectedRoute>} />
           <Route path="/logs" element={<ProtectedRoute><Logs /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

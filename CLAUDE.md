@@ -27,9 +27,9 @@ All backend routes use the `/api/` prefix.
 ## Key Files
 
 ### Backend — Core
-- `server.py` - FastAPI app. Signal/watchlist CRUD, SSE stream (`/api/logs/stream`), demo triggers (`/api/demo/trigger`, `/api/demo/trigger-all`), TinyFish stats, agent control. Auto-starts EDGAR agent and wires SSE queue to pipeline on boot.
+- `server.py` - FastAPI app. Signal/watchlist CRUD, SSE stream (`/api/logs/stream`), demo triggers (`/api/demo/trigger`, `/api/demo/trigger-all`), TinyFish stats, agent control. Auto-starts EDGAR agent and wires SSE queue to pipeline on boot. Wraps expensive synchronous AI workflows in `asyncio.to_thread` to maintain loop health.
 - `edgar_agent.py` - Autonomous SEC poller. Multi-form support (8-K, 10-K, 10-Q, 4, SC 13D). **3-step extraction fallback** (TinyFish -> SEC EFTS -> HTTP scrape). Emits logs to SSE stream. delegates to SignalPipeline.
-- `telegram_bot.py` - Smart Telegram alerts with multi-factor thresholds. Supports inline links without HTML symbol errors.
+- `telegram_bot.py` - Smart Telegram alerts with multi-factor thresholds. Supports inline links without HTML symbol errors. Extracts and prints individual intelligence events directly in the chat body.
 
 ### Backend — Pipeline (Phase 6 Final)
 - `signal_pipeline.py` - Core orchestrator. Event-driven via Registry pattern: `register_processor(type, processor)`. Routes: Classify -> Governance -> Enrich -> Score -> Store.
@@ -42,10 +42,11 @@ All backend routes use the `/api/` prefix.
 - `price_tracker.py` - Scheduled T+1h/T+24h/T+3d price checks. Database rows, not asyncio.sleep. Survives restarts.
 
 ### Frontend
-- `App.js` - Client-side routing: `/`, `/dashboard`, `/watchlist`, `/signal/:id`, `/settings`, `/logs`.
+- `App.js` - Client-side routing: `/`, `/dashboard`, `/watchlist`, `/signal/:id`, `/settings`, `/logs`, `/runs`.
 - `AppShell.jsx` - Shared layout shell with sidebar navigation, agent status bar.
-- `Dashboard.jsx` - Categorized feed. `CATEGORY_MAP` handles 7 groups. `CategorySection` accordion headers. **Instant rendering via localStorage cache**. Right sidebar includes the **Smart Demo Trigger panel** (fires all 5 form types with live SSE log viewer).
-- `Logs.jsx` - Live terminal-like SSE viewer connecting to `/api/logs/stream`. Color coded by pipeline step.
+- `Dashboard.jsx` - Categorized feed. `CATEGORY_MAP` handles 7 groups. `CategorySection` accordion headers. **Instant rendering via localStorage cache**. Right sidebar includes the **Smart Demo Trigger panel**.
+- `Runs.jsx` - High-level executive dashboard for tracking the results and yield of historical pipeline sweeps.
+- `Logs.jsx` - Live terminal-like SSE viewer connecting to `/api/logs/stream`. Color coded by pipeline step for debugging.
 - `Signal.jsx` - Deep-dive audit trail. Renders Chain of Thought, Key Facts, Governance checkboxes, Impact Score table, News Cross-Check, and Form Data grid. Fetches via `GET /api/signals/:id`.
 - `Watchlist.jsx` - Watchlist management with inline filing expand. Clicking a filing opens `/signal/:id` in new tab.
 - `Settings.jsx` - User settings page.

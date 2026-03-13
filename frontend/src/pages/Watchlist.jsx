@@ -251,6 +251,10 @@ export default function Watchlist() {
                     )}
                 </div>
             </div>
+            <style>{`
+                .filing-row:hover { background: #0a0a0a !important; }
+                .filing-row:hover .view-hint { color: #0066FF !important; }
+            `}</style>
         </AppShell>
     );
 }
@@ -362,6 +366,7 @@ function TickerCard({ ticker, latest, totalFilings, positives, risks, avgImpact,
                         return (
                             <div
                                 key={s.id}
+                                className="filing-row"
                                 style={{
                                     padding: '12px 16px',
                                     borderBottom: i < tickerSignals.length - 1 ? '1px solid #0a0a0a' : 'none',
@@ -371,8 +376,6 @@ function TickerCard({ ticker, latest, totalFilings, positives, risks, avgImpact,
                                     transition: 'background 100ms',
                                 }}
                                 onClick={() => window.open(`/signal/${s.id}`, '_blank')}
-                                onMouseEnter={e => e.currentTarget.style.background = '#0a0a0a'}
-                                onMouseLeave={e => e.currentTarget.style.background = '#060606'}
                             >
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
                                     <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -389,6 +392,9 @@ function TickerCard({ ticker, latest, totalFilings, positives, risks, avgImpact,
                                         {(s.impact_score || 0) >= 40 && (
                                             <span style={{ fontSize: '10px', color: '#333' }}>{s.impact_score}</span>
                                         )}
+                                        <span style={{ fontSize: '9px', color: '#161616', letterSpacing: '0.06em' }} className="view-hint">
+                                            VIEW INFO ↗
+                                        </span>
                                         <span style={{ fontSize: '10px', color: '#222' }}>
                                             {formatRelativeTime(s.filed_at)}
                                         </span>

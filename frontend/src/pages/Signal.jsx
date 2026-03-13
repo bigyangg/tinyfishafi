@@ -77,7 +77,7 @@ export default function Signal() {
 
                 {/* Back */}
                 <button
-                    onClick={() => navigate(-1)}
+                    onClick={() => navigate('/dashboard')}
                     style={{ background: 'none', border: 'none', color: '#333', cursor: 'pointer', fontSize: '11px', letterSpacing: '0.08em', padding: '0 0 20px', fontFamily: "'JetBrains Mono', monospace", display: 'block' }}
                 >
                     ← BACK TO FEED

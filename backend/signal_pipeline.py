@@ -33,23 +33,39 @@ def is_valid_signal(ticker: str, summary: str) -> bool:
 # ── Pipeline log emitter (sends to SSE queue if available) ──
 
 _log_queue = None
+_log_history_callback = None
 
 def set_log_queue(queue):
     """Set the asyncio.Queue used for SSE log streaming."""
     global _log_queue
     _log_queue = queue
 
-def pipeline_log(step: str, message: str, level: str = "info"):
+def set_log_history_callback(cb):
+    """Callback triggered per log entry to persist into server.py memory."""
+    global _log_history_callback
+    _log_history_callback = cb
+
+def pipeline_log(step: str, message: str, level: str = "info", run_id: str = None):
     """Emit a log entry to both Python logging and the SSE stream."""
     log_fn = {"success": logger.info, "warning": logger.warning, "error": logger.error}.get(level, logger.info)
     log_fn(f"[{step}] {message}")
+    
+    entry = {
+        "time": datetime.utcnow().strftime("%H:%M:%S"),
+        "step": step,
+        "message": message,
+        "level": level,
+    }
+    if run_id:
+        entry["run_id"] = run_id
+        
+    if _log_history_callback:
+        try:
+            _log_history_callback(run_id, entry)
+        except Exception:
+            pass
+
     if _log_queue is not None:
-        entry = {
-            "time": datetime.utcnow().strftime("%H:%M:%S"),
-            "step": step,
-            "message": message,
-            "level": level,
-        }
         try:
             _log_queue.put_nowait(entry)
         except Exception:
@@ -99,6 +115,7 @@ class ProcessedSignal:
     divergence_type: Optional[str] = None
     extraction_source: Optional[str] = None
     extraction_time_ms: Optional[int] = None
+    run_id: Optional[str] = None
 
 
 class FilingProcessor(ABC):
@@ -192,7 +209,7 @@ class SignalPipeline:
             self._market_data = MarketDataService()
         return self._market_data
     
-    def process(self, filing: RawFiling, watchlist_tickers: list[str] = None) -> Optional[ProcessedSignal]:
+    def process(self, filing: RawFiling, watchlist_tickers: list[str] = None, run_id: str = None) -> Optional[ProcessedSignal]:
         """
         Full pipeline: Classify -> Enrich -> Govern -> Score -> Store -> Alert.
         
@@ -430,10 +447,11 @@ class SignalPipeline:
             news_headlines=news_headlines if news_headlines else None,
             news_sentiment=news_sentiment_label,
             divergence_type=divergence_type,
+            run_id=run_id,
         )
         
-        pipeline_log("STORE", f"Signal saved to Supabase", "success")
-        pipeline_log("PIPELINE", f"{signal.ticker} complete ({total_time}s total)", "success")
+        pipeline_log("STORE", f"Signal saved to Supabase", "success", run_id=run_id)
+        pipeline_log("PIPELINE", f"{signal.ticker} complete ({total_time}s total)", "success", run_id=run_id)
         
         logger.info(
             f"[PIPELINE] Processed: {signal.ticker} | {signal.signal} | "
@@ -491,4 +509,6 @@ class SignalPipeline:
             row["key_facts"] = json.dumps(signal.key_facts)
         if signal.form_data is not None:
             row["form_data"] = json.dumps(signal.form_data)
+        if signal.run_id is not None:
+            row["run_id"] = signal.run_id
         return row

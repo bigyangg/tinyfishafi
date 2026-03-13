@@ -135,7 +135,8 @@ tinyfishafi/
         Landing.jsx                   # Marketing landing page
         Auth.jsx                      # Login and signup forms
         Dashboard.jsx                 # Categorized feed + right panel (demo trigger, stats, watchlist)
-        Logs.jsx                      # Live SSE pipeline log viewer
+        Logs.jsx                      # Live SSE pipeline log viewer for debugging
+        Runs.jsx                      # Executive dashboard for historical pipeline sweeps
         Watchlist.jsx                 # Watchlist management with inline filing expand
         Signal.jsx                    # Individual signal detail page
         Settings.jsx                  # User settings page
@@ -210,7 +211,7 @@ Email  Telegram  Browser  Dashboard
 Each channel works independently — disabling one does not affect the others:
 
 - **Dashboard:** Receives signals via Supabase Realtime WebSocket. Shows skeleton UI while loading, then instant cache hits on revisit.
-- **Telegram:** Smart multi-threshold alerting. Always alerts for watchlist tickers. Rich HTML format with company info, event labels, and SEC EDGAR links.
+- **Telegram:** Smart multi-threshold alerting. Always alerts for watchlist tickers. Rich HTML format explicitly lists extracted intelligence events (🟢 EARNINGS BEAT, 🔴 INSIDER SELL) directly in chat with deep links to the `/runs` dashboard.
 - **Browser Push:** Native OS notifications when tab is closed. Permission prompt shown on first visit. Service worker handles background events.
 - **Email Digest:** Daily summary of top 5 signals via Resend. Triggered via `POST /api/digest/send` (schedule with cron). Returns HTML preview if Resend is not configured.
 
@@ -240,10 +241,16 @@ The frontend subscribes to Supabase `postgres_changes` on the `signals` table. N
 - **Insider transaction details** — TYPE/VALUE/ROLE row for Form 4 cards
 - **Impact bar** on each compact 3-column card
 - Yahoo Finance autocomplete for watchlist via backend proxy
-- **Right panel:** TODAY stats, TOP SIGNALS, MARKET BRIEF, WATCHLIST zone, **Smart Demo Trigger** (with ticker autocomplete + live SSE log viewer)
+- **Right panel:** TODAY stats, TOP SIGNALS, MARKET BRIEF, WATCHLIST zone, **Smart Demo Trigger** (with ticker autocomplete)
+- **Dedicated Sweeps Dashboard (`/runs`)**: Rich history tracking of full pipeline runs with extracted signals
+- **Live Execution Monitor (`/logs`)**: Backend terminal stdout streamed over SSE for debugging
 - **Instant rendering** via localStorage cache — no loading spinners on revisit
 - 30-second relative timestamp auto-updates
 - **Market Brief age counter** ("42s ago" / "3m ago")
+
+### Concurrency & Threading
+
+The backend relies on `asyncio` for the main FastAPI event loop, but delegates heavy synchronous AI tasks (Gemini classification, Yahoo Finance lookup) into separate threads via `asyncio.to_thread`. This guarantees that the live SSE `/logs/stream` endpoint and other REST endpoints never hang or freeze while the `trigger-all` sweep is computing.
 
 ### AI Market Brief
 

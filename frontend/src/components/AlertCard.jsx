@@ -11,6 +11,9 @@ const FORM_COLORS = {
 };
 
 export default function AlertCard({ signal, isWatched, onToggleWatch, onClick, isNew, dimmed }) {
+  // Only trigger the "new" animation once per component mount, not every time the parent re-renders
+  const [shouldAnimate] = useState(isNew);
+
   // Live relative timestamps
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -42,7 +45,7 @@ export default function AlertCard({ signal, isWatched, onToggleWatch, onClick, i
   return (
     <div
       onClick={() => onClick && onClick(signal)}
-      className={isNew ? 'signal-enter' : ''}
+      className={shouldAnimate ? 'signal-enter' : ''}
       data-testid={`alert-card-${signal.id}`}
       style={{
         display: 'grid',
@@ -170,6 +173,24 @@ export default function AlertCard({ signal, isWatched, onToggleWatch, onClick, i
               ))}
             </div>
           )}
+
+        {/* Deep link into specific Pipeline execution run Logs */}
+        {signal.run_id && (
+          <div style={{ marginTop: '10px' }}>
+            <button
+              onClick={(e) => { e.stopPropagation(); window.open(`/logs?run=${signal.run_id}`, '_blank'); }}
+              style={{
+                background: 'transparent', border: 'none', padding: 0,
+                fontSize: '9px', color: '#0066FF', fontFamily: "'JetBrains Mono', monospace",
+                cursor: 'pointer', letterSpacing: '0.06em', transition: 'color 150ms'
+              }}
+              onMouseEnter={e => e.currentTarget.style.color = '#3388FF'}
+              onMouseLeave={e => e.currentTarget.style.color = '#0066FF'}
+            >
+              VIEW RUN LOG ↗
+            </button>
+          </div>
+        )}
       </div>
 
       {/* RIGHT: Confidence + time + watch */}

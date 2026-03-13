@@ -16,7 +16,7 @@ export default function AppShell({ children }) {
     const [agentStatus, setAgentStatus] = useState('not_initialized');
     const [filedToday, setFiledToday] = useState(0);
     const [nextPoll, setNextPoll] = useState(null);
-    const [backendOnline, setBackendOnline] = useState(null);
+    const [backendOnline, setBackendOnline] = useState(true); // Optimistic UI prevents red flicker
     const [countdown, setCountdown] = useState(null);
     const countdownRef = useRef(null);
 
@@ -25,6 +25,9 @@ export default function AppShell({ children }) {
     const [triggerResults, setTriggerResults] = useState([]);
     const [triggerSearching, setTriggerSearching] = useState(false);
     const [triggerOpen, setTriggerOpen] = useState(true);
+    const [triggerRunning, setTriggerRunning] = useState(false); // LOCK — prevent double-fire
+    const [activeTicker, setActiveTicker] = useState(null);
+    const triggerUnlockRef = useRef(null);
 
     const checkHealth = useCallback(async () => {
         try {
@@ -77,20 +80,40 @@ export default function AppShell({ children }) {
     };
 
     // Trigger a ticker through the pipeline
-    const fireTrigger = async (ticker) => {
+    const fireTrigger = useCallback(async (ticker) => {
+        if (triggerRunning) return; // LOCK — ignore double-clicks
+        const clean = ticker.trim().toUpperCase();
+        if (!clean) return;
+
+        // Immediately navigate to logs so the user sees the run start
+        navigate('/logs');
+        setActiveTicker(clean);
+        setTriggerRunning(true);
+        setTriggerQuery('');
+        setTriggerResults([]);
+
+        // Auto-unlock after 120s max (safety valve)
+        if (triggerUnlockRef.current) clearTimeout(triggerUnlockRef.current);
+        triggerUnlockRef.current = setTimeout(() => {
+            setTriggerRunning(false);
+            setActiveTicker(null);
+        }, 120_000);
+
         try {
-            await axios.post(`${API}/demo/trigger-all`, { ticker });
-            setTriggerQuery('');
-            setTriggerResults([]);
+            await axios.post(`${API}/trigger-all`, { ticker: clean });
         } catch (err) {
             console.error('Signal trigger failed:', err);
+        } finally {
+            setTriggerRunning(false);
+            setActiveTicker(null);
         }
-    };
+    }, [triggerRunning, navigate]);
 
     const navItems = [
         { to: '/dashboard', label: 'FEED', icon: '◈' },
         { to: '/watchlist', label: 'WATCHLIST', icon: '◎' },
-        { to: '/logs', label: 'PIPELINE', icon: '⊡' },
+        { to: '/runs', label: 'SWEEPS', icon: '▤' },
+        { to: '/logs', label: 'LOGS', icon: '⊡' },
         { to: '/settings', label: 'SETTINGS', icon: '⊙' },
     ];
 
@@ -230,46 +253,45 @@ export default function AppShell({ children }) {
 
                     {triggerOpen && (
                         <div style={{ padding: '0 12px 12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+
+                            {/* Active run banner */}
+                            {triggerRunning && activeTicker && (
+                                <div style={{
+                                    padding: '5px 8px', fontSize: '9px', letterSpacing: '0.08em',
+                                    color: '#C8A84B', border: '1px solid #C8A84B22', background: '#C8A84B08',
+                                    display: 'flex', alignItems: 'center', gap: '7px',
+                                }}>
+                                    <div style={{ width: '4px', height: '4px', borderRadius: '50%', background: '#C8A84B', animation: 'pulse 1.5s infinite' }} />
+                                    {activeTicker} RUNNING
+                                </div>
+                            )}
+
                             {/* Quick-fire buttons */}
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '4px' }}>
-                                {['TSLA', 'NVDA', 'AAPL', 'MSFT', 'AMZN', 'COIN'].map(t => (
-                                    <button
-                                        key={t}
-                                        onClick={async (e) => {
-                                            const btn = e.currentTarget;
-                                            btn.style.background = '#0066FF15';
-                                            btn.style.borderColor = '#0066FF';
-                                            btn.style.color = '#0066FF';
-                                            btn.textContent = '...';
-                                            try {
-                                                const res = await axios.post(`${API}/demo/trigger-all`, { ticker: t });
-                                                const forms = res.data?.forms_found?.length || 0;
-                                                btn.textContent = `${forms}`;
-                                                btn.style.color = '#00C805';
-                                                btn.style.borderColor = '#00C80540';
-                                                setTimeout(() => {
-                                                    btn.textContent = t;
-                                                    btn.style.background = '#111';
-                                                    btn.style.borderColor = '#1a1a1a';
-                                                    btn.style.color = '#555';
-                                                }, 4000);
-                                            } catch {
-                                                btn.textContent = '!';
-                                                btn.style.color = '#FF3333';
-                                            }
-                                        }}
-                                        style={{
-                                            background: '#111', border: '1px solid #1a1a1a', color: '#555',
-                                            padding: '5px 0', fontSize: '9px', cursor: 'pointer',
-                                            letterSpacing: '0.04em', fontFamily: "'JetBrains Mono', monospace",
-                                            transition: 'all 100ms', textAlign: 'center', borderRadius: '3px',
-                                        }}
-                                        onMouseEnter={e => { if (e.currentTarget.style.color === 'rgb(85, 85, 85)') { e.currentTarget.style.borderColor = '#333'; e.currentTarget.style.color = '#aaa'; } }}
-                                        onMouseLeave={e => { if (e.currentTarget.style.color === 'rgb(170, 170, 170)') { e.currentTarget.style.borderColor = '#1a1a1a'; e.currentTarget.style.color = '#555'; } }}
-                                    >
-                                        {t}
-                                    </button>
-                                ))}
+                                {['TSLA', 'NVDA', 'AAPL', 'MSFT', 'AMZN', 'COIN'].map(t => {
+                                    const isActive = activeTicker === t;
+                                    const locked = triggerRunning && !isActive;
+                                    return (
+                                        <button
+                                            key={t}
+                                            onClick={() => fireTrigger(t)}
+                                            disabled={locked}
+                                            title={locked ? 'Run in progress — wait for it to complete' : `Trigger ${t} pipeline sweep`}
+                                            style={{
+                                                background: isActive ? '#C8A84B18' : '#0a0a0a',
+                                                border: `1px solid ${isActive ? '#C8A84B' : '#151515'}`,
+                                                color: isActive ? '#C8A84B' : locked ? '#1a1a1a' : '#555',
+                                                padding: '5px 0', fontSize: '9px',
+                                                cursor: locked ? 'not-allowed' : 'pointer',
+                                                letterSpacing: '0.04em', fontFamily: "'JetBrains Mono', monospace",
+                                                transition: 'all 150ms', textAlign: 'center', borderRadius: '2px',
+                                                opacity: locked ? 0.4 : 1,
+                                            }}
+                                        >
+                                            {isActive ? '...' : t}
+                                        </button>
+                                    );
+                                })}
                             </div>
 
                             {/* Custom ticker with autocomplete */}

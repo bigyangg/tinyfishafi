@@ -544,13 +544,12 @@ async def trigger_demo_signal(body: dict):
         }
 
     except Exception as e:
-        pipeline_log("DEMO", f"Demo trigger failed: {e}", "error")
+        pipeline_log("SYSTEM", f"Demo trigger failed: {e}", "error")
         return {"error": str(e)}
 
-
-@api_router.post("/demo/trigger-all")
+@api_router.post("/trigger-all")
 async def trigger_all_forms(body: dict):
-    """Smart demo: run ALL filing types for a ticker in one click."""
+    """Smart sweep: run ALL filing types for a ticker in one click."""
     import time
     import asyncio
     import httpx
@@ -559,7 +558,26 @@ async def trigger_all_forms(body: dict):
     ticker = body.get("ticker", "TSLA").upper()
     ALL_FORMS = ["8-K", "10-K", "10-Q", "4", "SC 13D"]
 
-    pipeline_log("DEMO", f"Smart trigger started for {ticker} — scanning all {len(ALL_FORMS)} form types")
+    # Generate a unique run ID so the frontend can group log events into sessions
+    import uuid as _uuid
+    run_id = str(_uuid.uuid4())[:8]
+
+    # Initialize the run in the history store
+    recent_runs[run_id] = {
+        "id": run_id,
+        "ticker": ticker,
+        "startTime": datetime.utcnow().isoformat() + "Z",
+        "complete": False,
+        "entries": [],
+        "signals": 0,
+        "errors": 0
+    }
+    # Keep only the last 50 runs
+    if len(recent_runs) > 50:
+        oldest = list(recent_runs.keys())[0]
+        del recent_runs[oldest]
+
+    pipeline_log("SYSTEM", f"Trigger started for {ticker} — scanning all {len(ALL_FORMS)} form types", run_id=run_id)
 
     try:
         # Step 1: Resolve CIK
@@ -579,10 +597,12 @@ async def trigger_all_forms(body: dict):
                 break
 
         if not cik:
-            pipeline_log("DEMO", f"Could not resolve CIK for {ticker}", "error")
+            pipeline_log("SYSTEM", f"Could not resolve CIK for {ticker}", "error", run_id=run_id)
+            recent_runs[run_id]["complete"] = True
+            recent_runs[run_id]["endTime"] = datetime.utcnow().isoformat() + "Z"
             return {"error": f"Could not resolve CIK for {ticker}"}
 
-        pipeline_log("DEMO", f"Resolved {ticker} -> CIK {cik} ({entity_name})")
+        pipeline_log("SYSTEM", f"Resolved {ticker} -> CIK {cik} ({entity_name})", run_id=run_id)
 
         # Step 2: Fetch submissions
         async with httpx.AsyncClient() as client:
@@ -614,7 +634,7 @@ async def trigger_all_forms(body: dict):
                         }
                         break
 
-        pipeline_log("DEMO", f"Found {len(found_forms)}/{len(ALL_FORMS)} form types: {', '.join(found_forms.keys())}")
+        pipeline_log("SYSTEM", f"Found {len(found_forms)}/{len(ALL_FORMS)} form types: {', '.join(found_forms.keys())}", run_id=run_id)
 
         # Step 4: Process each form type in background
         cik_clean = str(int(cik))
@@ -623,7 +643,7 @@ async def trigger_all_forms(body: dict):
         async def _process_form(form_key, filing_info):
             try:
                 actual_form = filing_info["form"]
-                pipeline_log("DEMO", f"[{ticker}] Processing {actual_form} filed {filing_info['date']}...")
+                pipeline_log("SYSTEM", f"[{ticker}] Processing {actual_form} filed {filing_info['date']}...", run_id=run_id)
 
                 filing_url = (
                     f"https://www.sec.gov/Archives/edgar/data/"
@@ -631,7 +651,6 @@ async def trigger_all_forms(body: dict):
                     f"{filing_info['accession_dashes']}-index.htm"
                 )
 
-                # Fetch text
                 filing_text = None
                 if filing_info["primary_doc"]:
                     doc_url = (
@@ -639,18 +658,79 @@ async def trigger_all_forms(body: dict):
                         f"{cik_clean}/{filing_info['accession_clean']}/"
                         f"{filing_info['primary_doc']}"
                     )
-                    try:
-                        async with httpx.AsyncClient() as client:
-                            doc_resp = await client.get(
-                                doc_url,
-                                headers={"User-Agent": "AFI demo@afi.com"},
-                                timeout=15,
-                            )
-                        if doc_resp.status_code == 200:
-                            filing_text = doc_resp.text[:15000]
-                            pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] Fetched {len(filing_text)} chars")
-                    except Exception:
-                        pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] Could not fetch text", "warning")
+                    
+                    # --- DEEP TINYFISH INTEGRATION ---
+                    # We stream the agent's chain-of-thought directly into the pipeline_log
+                    api_key = os.environ.get("TINYFISH_API_KEY", "")
+                    use_tinyfish = os.environ.get("USE_TINYFISH", "true").lower() == "true"
+                    
+                    if use_tinyfish and api_key:
+                        pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] Booting remote web agent...", "info", run_id=run_id)
+                        goal = (
+                            "Carefully extract the full text content of this SEC filing. "
+                            "Return the complete text of all items disclosed, including any financial figures, "
+                            "executive changes, agreements, or events described. "
+                            "Return as plain text JSON: {\"text\": \"<full filing content>\"}"
+                        )
+                        try:
+                            async with httpx.AsyncClient() as client:
+                                async with client.stream(
+                                    "POST",
+                                    "https://agent.tinyfish.ai/v1/automation/run-sse",
+                                    headers={
+                                        "X-API-Key": api_key,
+                                        "Content-Type": "application/json"
+                                    },
+                                    json={
+                                        "url": doc_url,
+                                        "goal": goal,
+                                        "browser_profile": "stealth"
+                                    },
+                                    timeout=120
+                                ) as tf_resp:
+                                    if tf_resp.status_code == 200:
+                                        async for line in tf_resp.aiter_lines():
+                                            if not line or not line.startswith("data:"): continue
+                                            raw = line[5:].strip()
+                                            if not raw: continue
+                                            try:
+                                                event = json.loads(raw)
+                                                if event.get("type") == "PROGRESS":
+                                                    msg = event.get("message", "")
+                                                    if msg:
+                                                        pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] {msg}", "info", run_id=run_id)
+                                                elif event.get("type") == "COMPLETE" and event.get("status") == "COMPLETED":
+                                                    res = event.get("resultJson") or event.get("result", "")
+                                                    if isinstance(res, dict): filing_text = res.get("text", str(res))
+                                                    elif isinstance(res, str):
+                                                        try: filing_text = json.loads(res).get("text", res)
+                                                        except: filing_text = res
+                                                    if filing_text: filing_text = filing_text[:15000]
+                                                    pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] Agent extracted {len(filing_text or '')} chars", "success", run_id=run_id)
+                                                elif event.get("type") == "ERROR":
+                                                    pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] Agent error: {event.get('message')}", "error", run_id=run_id)
+                                            except json.JSONDecodeError:
+                                                pass
+                                    else:
+                                        pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] HTTP {tf_resp.status_code}", "warning", run_id=run_id)
+                        except Exception as e:
+                            pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] Stream connection failed: {e}", "warning", run_id=run_id)
+
+                    # --- FALLBACK ---
+                    if not filing_text:
+                        pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] Falling back to SEC HTTP get...", "warning", run_id=run_id)
+                        try:
+                            async with httpx.AsyncClient() as client:
+                                doc_resp = await client.get(
+                                    doc_url,
+                                    headers={"User-Agent": "AFI demo@afi.com"},
+                                    timeout=15,
+                                )
+                            if doc_resp.status_code == 200:
+                                filing_text = doc_resp.text[:15000]
+                                pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] Fetched {len(filing_text)} chars from SEC", "success", run_id=run_id)
+                        except Exception:
+                            pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] Could not fetch text", "warning", run_id=run_id)
 
                 demo_accession = f"demo_{filing_info['accession_dashes']}_{int(time.time())}"
 
@@ -664,41 +744,55 @@ async def trigger_all_forms(body: dict):
                     filing_text=filing_text,
                 )
 
-                pipeline_log("PIPELINE", f"[{ticker}/{actual_form}] Classifying with Gemini...")
+                pipeline_log("PIPELINE", f"[{ticker}/{actual_form}] Classifying with Gemini...", run_id=run_id)
                 pipe = SignalPipeline(supabase)
                 
                 # Run the heavy, synchronous pipeline in a separate thread to avoid blocking the event loop
-                signal = await asyncio.to_thread(pipe.process, raw_filing)
+                signal = await asyncio.to_thread(pipe.process, raw_filing, run_id=run_id)
 
                 if signal:
                     row = pipe.signal_to_db_row(signal)
                     # Run synchronous Supabase insert in a thread too
                     await asyncio.to_thread(supabase.table("signals").insert(row).execute)
-                    pipeline_log("PIPELINE", f"[{ticker}/{actual_form}] {signal.signal} (conf {signal.confidence}) — {signal.summary[:60]}", "success")
+                    pipeline_log("PIPELINE", f"[{ticker}/{actual_form}] {signal.signal} (conf {signal.confidence}) — {signal.summary[:60]}", "success", run_id=run_id)
                     return {"form": actual_form, "signal": signal.signal, "confidence": signal.confidence, "event_type": signal.event_type}
                 else:
-                    pipeline_log("PIPELINE", f"[{ticker}/{actual_form}] No signal produced", "warning")
+                    pipeline_log("PIPELINE", f"[{ticker}/{actual_form}] No signal produced", "warning", run_id=run_id)
                     return {"form": actual_form, "signal": None}
 
             except Exception as e:
-                pipeline_log("PIPELINE", f"[{ticker}/{form_key}] Error: {e}", "error")
+                pipeline_log("PIPELINE", f"[{ticker}/{form_key}] Error: {e}", "error", run_id=run_id)
                 return {"form": form_key, "error": str(e)}
 
-        async def _run_all():
+        async def _run_background_pipeline():
             from telegram_bot import send_trigger_summary
-            for form_key, filing_info in found_forms.items():
-                result = await _process_form(form_key, filing_info)
-                results.append(result)
-
-            pipeline_log("PIPELINE", f"[{ticker}] All done — {len(results)} forms processed", "success")
+            signals_generated = 0
+            try:
+                for form_key, filing_info in found_forms.items():
+                    result = await _process_form(form_key, filing_info)
+                    results.append(result)
+            
+                for res in results:
+                    if res:
+                        signals_generated += 1
+                
+                pipeline_log("SYSTEM", f"All done — {len(results)} forms processed, {signals_generated} signals.", run_id=run_id)
+            except Exception as e:
+                pipeline_log("SYSTEM", f"Pipeline background sweep failed: {e}", "error", run_id=run_id)
+            finally:
+                if run_id in recent_runs:
+                    recent_runs[run_id]["complete"] = True
+                    recent_runs[run_id]["endTime"] = datetime.utcnow().isoformat() + "Z"
+                    recent_runs[run_id]["signals"] = signals_generated
 
             # Send comprehensive Telegram summary of all results
             try:
-                send_trigger_summary(ticker, entity_name, results)
+                await asyncio.to_thread(send_trigger_summary, ticker, entity_name, results, run_id)
             except Exception as e:
-                pipeline_log("PIPELINE", f"[{ticker}] Telegram summary failed: {e}", "warning")
+                pipeline_log("PIPELINE", f"[{ticker}] Telegram summary failed: {e}", "warning", run_id=run_id)
 
-        asyncio.create_task(_run_all())
+        # Start the background sweep
+        asyncio.create_task(_run_background_pipeline())
 
         return {
             "status":     "triggered",
@@ -709,10 +803,22 @@ async def trigger_all_forms(body: dict):
         }
 
     except Exception as e:
-        pipeline_log("DEMO", f"Smart trigger failed: {e}", "error")
+        pipeline_log("SYSTEM", f"Smart trigger failed: {e}", "error")
         return {"error": str(e)}
 
 # ============ SSE LOG STREAM ============
+import asyncio
+from typing import Dict, List, Any
+
+# In-memory store for recent pipeline runs so the Logs UI survives refreshes
+recent_runs: Dict[str, Dict[str, Any]] = {}
+
+@api_router.get("/logs/history")
+async def get_logs_history():
+    """Returns the last 50 pipeline runs so the frontend Logs UI can survive a refresh."""
+    return {"runs": list(recent_runs.values())}
+
+# Global queue for SSE live logs
 log_queue = asyncio.Queue()
 
 @api_router.get("/logs/stream")
@@ -975,13 +1081,21 @@ app.add_middleware(
 async def startup_event():
     global edgar_agent_instance
 
-    # Step 0: Wire up SSE log queue to pipeline
+    # Step 0: Wire up SSE log queue and history callback to pipeline
     try:
-        from signal_pipeline import set_log_queue
+        from signal_pipeline import set_log_queue, set_log_history_callback
         set_log_queue(log_queue)
-        logger.info("SSE log queue connected to pipeline")
+        
+        def _history_cb(run_id: str, entry: dict):
+            if run_id in recent_runs:
+                recent_runs[run_id]["entries"].append(entry)
+                if len(recent_runs[run_id]["entries"]) > 1000:
+                    recent_runs[run_id]["entries"] = recent_runs[run_id]["entries"][-1000:]
+                    
+        set_log_history_callback(_history_cb)
+        logger.info("SSE log queue and history callback connected to pipeline")
     except Exception as e:
-        logger.warning(f"Failed to connect SSE log queue: {e}")
+        logger.warning(f"Failed to connect SSE log queue and callback: {e}")
 
     # Step 1: Clean seed data
     await cleanup_seed_data()

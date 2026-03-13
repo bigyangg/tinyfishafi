@@ -228,7 +228,7 @@ def send_test_message():
         return False
 
 
-def send_trigger_summary(ticker: str, company: str, results: list):
+def send_trigger_summary(ticker: str, company: str, results: list, run_id: str = None):
     """
     Send a comprehensive Telegram summary after a trigger-all run completes.
     Shows each form processed with its signal, confidence, and event type.
@@ -243,14 +243,29 @@ def send_trigger_summary(ticker: str, company: str, results: list):
 
         frontend_url = os.environ.get("REACT_APP_URL", "http://localhost:3000")
 
+        # Build extracted signals summary block
+        signals_block = ""
+        if successful:
+            signals_block = "\n<b>INTELLIGENCE EXTRACTED:</b>\n"
+            for s in successful:
+                emoji = "🟢" if s['signal'] == "Positive" else "🔴" if s['signal'] == "Risk" else "⚪"
+                event = s.get('event_type') or 'MATERIAL EVENT'
+                event_clean = str(event).replace("_", " ")
+                conf = s.get('confidence', 0)
+                signals_block += f"{emoji} <b>{event_clean}</b> ({conf}% conf)\n"
+        else:
+            signals_block = "\n<i>No actionable intelligence found.</i>\n"
+
         message = (
-            f"<b>[AFI PIPELINE COMPLETE]</b>\n"
+            f"<b>[AFI] SWEEP COMPLETE</b>\n"
             f"<b>{_escape_html(ticker)}</b> - {_escape_html(company)}\n"
-            f"Processed {len(results)} SEC filings\n\n"
-            f"[+] {len(successful)} actionable signals\n"
-            f"[-] {len(no_signal)} routine (skipped)\n"
-            f"[!] {len(failed)} errors\n\n"
-            f"<a href='{frontend_url}/dashboard'>View Intelligence Feed -></a>"
+            f"Processed <i>{len(results)}</i> past SEC filings\n"
+            f"{signals_block}\n"
+            f"<b>METRICS:</b>\n"
+            f" • {len(successful)} Signals Generated\n"
+            f" • {len(no_signal)} Routine (Ignored)\n"
+            f" • {len(failed)} Errors\n\n"
+            f"<a href='{frontend_url}/logs" + (f"?run={run_id}" if run_id else "") + f"'>View Complete Trace ↗</a>"
         )
 
         _send_telegram_message(message, parse_mode="HTML")
