@@ -18,11 +18,11 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 TELEGRAM_ENABLED = os.environ.get("TELEGRAM_ENABLED", "false").lower() == "true"
 
-# Signal emoji map
-SIGNAL_EMOJI = {
-    "Positive": "\U0001f7e2",  # green circle
-    "Neutral": "\u26aa",       # white circle
-    "Risk": "\U0001f534",      # red circle
+# Signal formatting map
+SIGNAL_PREFIX = {
+    "Positive": "[+]",
+    "Neutral":  "[-]",
+    "Risk":     "[!]",
 }
 
 # Event type labels for human-readable messages
@@ -126,14 +126,14 @@ def send_signal_alert(signal_data, is_watched=False):
         except Exception:
             date_str = str(filed_at)[:10] if filed_at else "Unknown"
 
-        emoji = SIGNAL_EMOJI.get(signal, "\u26aa")
+        prefix = SIGNAL_PREFIX.get(signal, "[-]")
         event_label = EVENT_LABELS.get(event_type, event_type or "8-K Filing")
 
         # Build SEC EDGAR URL
         edgar_url = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={ticker}&type=8-K&dateb=&owner=include&count=5"
 
         # Watched ticker indicator
-        watched_line = "\u2b50 <b>WATCHED TICKER</b>\n\n" if is_watched else ""
+        watched_line = "[WATCHED TICKER]\n\n" if is_watched else ""
 
         # Event + impact line
         enrichment = ""
@@ -144,10 +144,10 @@ def send_signal_alert(signal_data, is_watched=False):
 
         message = (
             f"{watched_line}"
-            f"\U0001f514 <b>AFI ALERT</b>\n\n"
-            f"<b>{ticker}</b> \u2014 {filing_type}\n"
+            f"<b>[AFI ALERT]</b>\n\n"
+            f"<b>{ticker}</b> - {filing_type}\n"
             f"{_escape_html(company)}\n\n"
-            f"Signal: {emoji} <b>{signal}</b>\n"
+            f"Signal: {prefix} <b>{signal}</b>\n"
             f"{summary}\n\n"
             f"Confidence: <code>{confidence}%</code> | {date_str}"
             f"{enrichment}\n\n"
@@ -211,14 +211,14 @@ def send_test_message():
 
     try:
         _send_telegram_message(
-            "\U0001f514 <b>AFI Bot Test</b>\n\n"
+            "<b>[AFI BOT TEST]</b>\n\n"
             "Telegram integration is working.\n"
             "You will receive alerts when new SEC filings are detected.\n\n"
             "Alert triggers:\n"
-            "\u2022 Watchlist tickers (always)\n"
-            "\u2022 High-confidence non-routine events (\u226570%)\n"
-            "\u2022 Positive/Risk signals (\u226560% confidence)\n"
-            "\u2022 High impact scores (\u226555/100)",
+            "- Watchlist tickers (always)\n"
+            "- High-confidence non-routine events (>=70%)\n"
+            "- Positive/Risk signals (>=60% confidence)\n"
+            "- High impact scores (>=55/100)",
             parse_mode="HTML",
         )
         logger.info("Test message sent successfully")
@@ -241,32 +241,16 @@ def send_trigger_summary(ticker: str, company: str, results: list):
         failed = [r for r in results if r.get("error")]
         no_signal = [r for r in results if not r.get("signal") and not r.get("error")]
 
-        # Build per-form lines
-        lines = []
-        for r in results:
-            form = _escape_html(r.get("form", "?"))
-            if r.get("signal"):
-                sig = r["signal"]
-                conf = r.get("confidence", 0)
-                evt = r.get("event_type", "")
-                emoji = SIGNAL_EMOJI.get(sig, "\u26aa")
-                evt_label = EVENT_LABELS.get(evt, evt.replace("_", " ") if evt else "")
-                lines.append(f"  {emoji} <b>{form}</b>: {sig} ({conf}%) \u2014 {_escape_html(evt_label)}")
-            elif r.get("error"):
-                lines.append(f"  \u274c <b>{form}</b>: Error")
-            else:
-                lines.append(f"  \u26aa <b>{form}</b>: No signal")
-
-        detail_block = "\n".join(lines)
+        frontend_url = os.environ.get("REACT_APP_URL", "http://localhost:3000")
 
         message = (
-            f"\U0001f4ca <b>AFI SIGNAL TRIGGER COMPLETE</b>\n\n"
-            f"<b>{_escape_html(ticker)}</b> \u2014 {_escape_html(company)}\n"
-            f"{len(results)} forms processed\n\n"
-            f"{detail_block}\n\n"
-            f"\u2705 {len(successful)} signals  |  "
-            f"\u26aa {len(no_signal)} skipped  |  "
-            f"\u274c {len(failed)} errors"
+            f"<b>[AFI PIPELINE COMPLETE]</b>\n"
+            f"<b>{_escape_html(ticker)}</b> - {_escape_html(company)}\n"
+            f"Processed {len(results)} SEC filings\n\n"
+            f"[+] {len(successful)} actionable signals\n"
+            f"[-] {len(no_signal)} routine (skipped)\n"
+            f"[!] {len(failed)} errors\n\n"
+            f"<a href='{frontend_url}/dashboard'>View Intelligence Feed -></a>"
         )
 
         _send_telegram_message(message, parse_mode="HTML")
