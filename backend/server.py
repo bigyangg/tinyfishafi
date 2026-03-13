@@ -666,11 +666,14 @@ async def trigger_all_forms(body: dict):
 
                 pipeline_log("PIPELINE", f"[{ticker}/{actual_form}] Classifying with Gemini...")
                 pipe = SignalPipeline(supabase)
-                signal = pipe.process(raw_filing)
+                
+                # Run the heavy, synchronous pipeline in a separate thread to avoid blocking the event loop
+                signal = await asyncio.to_thread(pipe.process, raw_filing)
 
                 if signal:
                     row = pipe.signal_to_db_row(signal)
-                    supabase.table("signals").insert(row).execute()
+                    # Run synchronous Supabase insert in a thread too
+                    await asyncio.to_thread(supabase.table("signals").insert(row).execute)
                     pipeline_log("PIPELINE", f"[{ticker}/{actual_form}] {signal.signal} (conf {signal.confidence}) — {signal.summary[:60]}", "success")
                     return {"form": actual_form, "signal": signal.signal, "confidence": signal.confidence, "event_type": signal.event_type}
                 else:
