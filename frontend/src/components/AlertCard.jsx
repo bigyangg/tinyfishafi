@@ -8,6 +8,8 @@ const FORM_COLORS = {
   '10-Q': { bg: '#00C80515', border: '#00C80540', text: '#00C805' },
   '4': { bg: '#A855F715', border: '#A855F740', text: '#A855F7' },
   'SC 13D': { bg: '#FF6B0015', border: '#FF6B0040', text: '#FF6B00' },
+  'S-1': { bg: '#EC489915', border: '#EC489940', text: '#EC4899' },
+  'S-1/A': { bg: '#EC489915', border: '#EC489940', text: '#EC4899' },
 };
 
 function timeAgo(dateStr) {

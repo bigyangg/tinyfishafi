@@ -26,7 +26,7 @@ EDGAR_USER_AGENT = "AFI-Bot/1.0 (afi@tinyfish.io)"
 TELEGRAM_IMPACT_THRESHOLD = int(os.environ.get("TELEGRAM_IMPACT_THRESHOLD", "40"))
 
 # All filing types to monitor
-FORMS_TO_MONITOR = ["8-K", "10-K", "10-Q", "4", "SC 13D"]
+FORMS_TO_MONITOR = ["8-K", "10-K", "10-Q", "4", "SC 13D", "S-1", "S-1/A"]
 
 
 class EdgarAgent:
@@ -427,7 +427,7 @@ class EdgarAgent:
             # Detect filing type from source data
             filing_type = source.get("form_type", source.get("filing_type", "8-K"))
             # Normalize form type names
-            filing_type_map = {"8-K": "8-K", "10-K": "10-K", "10-Q": "10-Q", "4": "4", "SC 13D": "SC 13D", "SC 13D/A": "SC 13D"}
+            filing_type_map = {"8-K": "8-K", "10-K": "10-K", "10-Q": "10-Q", "4": "4", "SC 13D": "SC 13D", "SC 13D/A": "SC 13D", "S-1": "S-1", "S-1/A": "S-1"}
             filing_type = filing_type_map.get(filing_type, filing_type)
             
             pipeline_log("PIPELINE", f"Processing {resolved_ticker or 'UNKNOWN'} {filing_type}")

@@ -111,6 +111,7 @@ export default function AppShell({ children }) {
 
     const navItems = [
         { to: '/dashboard', label: 'FEED', icon: '◈' },
+        { to: '/leaderboard', label: 'DIVERGENCE', icon: '⚠' },
         { to: '/watchlist', label: 'WATCHLIST', icon: '◎' },
         { to: '/runs', label: 'SWEEPS', icon: '▤' },
         { to: '/logs', label: 'LOGS', icon: '⊡' },
@@ -369,7 +370,7 @@ export default function AppShell({ children }) {
                             </div>
 
                             <div style={{ fontSize: '7px', color: '#222', letterSpacing: '0.06em', lineHeight: 1.5 }}>
-                                Runs all 5 form types through the full pipeline. Results appear in the feed + Telegram.
+                                Runs all 6 form types through the full pipeline. Results appear in the feed + Telegram.
                             </div>
                         </div>
                     )}

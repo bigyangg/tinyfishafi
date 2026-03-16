@@ -418,6 +418,35 @@ async def edgar_fetch_company(data: ManualFetch):
         raise HTTPException(status_code=404, detail=result.get("message"))
     return result
 
+# ============ DIVERGENCE LEADERBOARD ============
+
+@api_router.get("/leaderboard/divergence")
+async def get_divergence_leaderboard():
+    """Return companies ranked by divergence score (>30), deduplicated by ticker."""
+    try:
+        result = supabase.table("signals") \
+            .select("id,ticker,company,filing_type,divergence_score,divergence_severity,contradiction_summary,public_claim,filing_reality,filed_at,summary,classification") \
+            .gt("divergence_score", 30) \
+            .order("divergence_score", desc=True) \
+            .limit(100) \
+            .execute()
+
+        rows = result.data or []
+
+        # Deduplicate: keep highest divergence_score per ticker
+        seen = {}
+        for row in rows:
+            ticker = row.get("ticker", "UNKNOWN")
+            if ticker not in seen or (row.get("divergence_score", 0) or 0) > (seen[ticker].get("divergence_score", 0) or 0):
+                seen[ticker] = row
+
+        leaderboard = sorted(seen.values(), key=lambda x: -(x.get("divergence_score", 0) or 0))
+
+        return {"leaderboard": leaderboard, "count": len(leaderboard)}
+    except Exception as e:
+        logger.error(f"[LEADERBOARD] Divergence fetch failed: {e}")
+        return {"leaderboard": [], "count": 0}
+
 # ============ DEMO TRIGGER ============
 class DemoTrigger(BaseModel):
     ticker: str
@@ -579,7 +608,7 @@ async def trigger_all_forms(body: dict):
     from signal_pipeline import SignalPipeline, RawFiling, pipeline_log
 
     ticker = body.get("ticker", "TSLA").upper()
-    ALL_FORMS = ["8-K", "10-K", "10-Q", "4", "SC 13D"]
+    ALL_FORMS = ["8-K", "10-K", "10-Q", "4", "SC 13D", "S-1"]
 
     # Generate a unique run ID so the frontend can group log events into sessions
     import uuid as _uuid
@@ -903,6 +932,37 @@ async def update_config(data: ConfigUpdate):
         logger.error(f"Failed to update config: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# ============ DIVERGENCE LEADERBOARD ============
+@api_router.get("/leaderboard/divergence")
+async def get_divergence_leaderboard():
+    """Returns signals ranked by divergence score (SAID vs FILED contradiction).
+    Deduplicates by ticker, keeping the highest divergence score."""
+    try:
+        result = supabase.table("signals") \
+            .select("id, ticker, company, filing_type, divergence_score, divergence_severity, contradiction_summary, public_claim, filing_reality") \
+            .gt("divergence_score", 0) \
+            .order("divergence_score", desc=True) \
+            .limit(100) \
+            .execute()
+
+        rows = result.data or []
+
+        # Deduplicate by ticker — keep highest divergence score per ticker
+        seen = {}
+        for row in rows:
+            ticker = row.get("ticker", "")
+            if not ticker:
+                continue
+            existing = seen.get(ticker)
+            if existing is None or (row.get("divergence_score") or 0) > (existing.get("divergence_score") or 0):
+                seen[ticker] = row
+
+        leaderboard = sorted(seen.values(), key=lambda x: x.get("divergence_score", 0), reverse=True)
+        return {"leaderboard": leaderboard, "total": len(leaderboard)}
+    except Exception as e:
+        logger.error(f"Leaderboard query failed: {e}")
+        return {"leaderboard": [], "total": 0, "error": str(e)}
+
 # ============ HEALTH CHECK ============
 @api_router.get("/health")
 async def health_check():
@@ -950,6 +1010,53 @@ async def telegram_setup():
             return {"error": "No messages found. Send /start to your bot first.", "raw": data.get("result", [])}
     except Exception as e:
         return {"error": str(e)}
+
+# ============ PER-USER TELEGRAM ============
+@api_router.post("/telegram/connect")
+async def telegram_connect(body: dict, auth: str = Depends(get_current_user)):
+    """Generate a verification code for per-user Telegram linking."""
+    import uuid as _uuid
+    user_id = auth  # get_current_user returns user_id
+    code = str(_uuid.uuid4())[:8].upper()
+    try:
+        supabase.table("telegram_verification_codes").insert({
+            "user_id": user_id,
+            "code": code,
+            "used": False,
+        }).execute()
+        return {"code": code, "instructions": "Send /verify " + code + " to the AFI Telegram bot"}
+    except Exception as e:
+        logger.error(f"Telegram connect failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.delete("/telegram/disconnect")
+async def telegram_disconnect(auth: str = Depends(get_current_user)):
+    """Disconnect per-user Telegram."""
+    user_id = auth
+    try:
+        supabase.table("user_telegram").delete().eq("user_id", user_id).execute()
+        return {"status": "disconnected"}
+    except Exception as e:
+        logger.error(f"Telegram disconnect failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.get("/telegram/status")
+async def telegram_user_status(auth: str = Depends(get_current_user)):
+    """Check if current user has Telegram connected."""
+    user_id = auth
+    try:
+        result = supabase.table("user_telegram") \
+            .select("telegram_chat_id, verified") \
+            .eq("user_id", user_id) \
+            .limit(1) \
+            .execute()
+        if result.data and len(result.data) > 0:
+            row = result.data[0]
+            return {"connected": True, "verified": row.get("verified", False)}
+        return {"connected": False, "verified": False}
+    except Exception as e:
+        logger.error(f"Telegram status check failed: {e}")
+        return {"connected": False, "verified": False}
 
 # ============ EMAIL TEST ============
 @api_router.post("/email/test")
@@ -1380,6 +1487,14 @@ async def startup_event():
     # Step 4: Genome backfill for Tier 1 companies (non-blocking)
     import asyncio
     asyncio.create_task(run_genome_backfill())
+
+    # Step 5: Start Telegram command polling (non-blocking)
+    try:
+        from telegram_bot import poll_telegram_commands
+        asyncio.create_task(poll_telegram_commands(supabase))
+        logger.info("Telegram command polling started")
+    except Exception as e:
+        logger.warning(f"Failed to start Telegram polling: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_event():

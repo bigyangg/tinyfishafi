@@ -103,3 +103,43 @@ INSERT INTO agent_config (config_version, tier1_tickers, tier2_sectors, pending_
 SELECT 1, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, 
     '{"poll_interval": 120, "enrichment_timeout": 3, "alert_threshold": 60}'::jsonb
 WHERE NOT EXISTS (SELECT 1 FROM agent_config LIMIT 1);
+
+-- ============================================
+-- 4. Enrichment & Genome Columns (Phase 7)
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS company_genomes (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  ticker TEXT UNIQUE NOT NULL,
+  cik TEXT,
+  genome_data JSONB,
+  genome_score INTEGER,
+  genome_trend TEXT CHECK (genome_trend IN ('IMPROVING', 'STABLE', 'DETERIORATING', 'CRITICAL')),
+  pattern_matches JSONB,
+  genome_alert BOOLEAN DEFAULT false,
+  last_updated TIMESTAMPTZ DEFAULT now(),
+  filing_history_analyzed INTEGER
+);
+
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS news_dominant_theme TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS reddit_sentiment NUMERIC;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS stocktwits_sentiment NUMERIC;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS social_volume_spike BOOLEAN;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS social_vs_filing_delta TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS insider_net_30d NUMERIC;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS insider_net_90d NUMERIC;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS insider_ceo_activity TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS insider_unusual_delay BOOLEAN;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS congress_net_sentiment TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS congress_trades JSONB;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS congress_suspicious_timing BOOLEAN;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS congress_timing_note TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS divergence_score INTEGER;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS divergence_severity TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS contradiction_summary TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS public_claim TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS filing_reality TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS genome_score INTEGER;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS genome_trend TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS genome_pattern_matches JSONB;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS genome_alert BOOLEAN;

@@ -4,7 +4,7 @@
 
 AFI (Market Event Intelligence) is a real-time signal platform for traders. It polls SEC EDGAR continuously, detects new filings (8-K, 10-K, 10-Q, 4, SC 13D), classifies market events with Gemini 2.5 Flash, applies 5-stage governance validation, enriches with price data, scores impact (0–100), and delivers structured signals through a live dashboard, Telegram alerts, and server-sent events (SSE) logs.
 
-**Current state:** Phase 6 Final Architecture complete. Includes multi-form processors, rigorous JSON governance to prevent AI hallucinations, real-time pipeline log streaming via SSE, an automated demo trigger endpoint, full audit trail UI (chain of thought, key facts, governance checks, impact breakdown), and an updated "Intelligence Pipeline" landing page.
+**Current state:** Phase 7 Intelligence & Enrichment complete. Includes concurrent enrichment agents (news, social, insider, congress, divergence, genome), rigorous JSON governance to prevent AI hallucinations, real-time pipeline log streaming via SSE, and an updated frontend with 5-View Navigation (BRIEF, RADAR, INTEL, FEED, ALERTS) and Bloomberg-style Signal Cards.
 
 ---
 
@@ -31,7 +31,9 @@ All backend routes use the `/api/` prefix.
 - `edgar_agent.py` - Autonomous SEC poller. Multi-form support (8-K, 10-K, 10-Q, 4, SC 13D). **3-step extraction fallback** (TinyFish -> SEC EFTS -> HTTP scrape). Emits logs to SSE stream. delegates to SignalPipeline.
 - `telegram_bot.py` - Smart Telegram alerts with multi-factor thresholds. Supports inline links without HTML symbol errors. Extracts and prints individual intelligence events directly in the chat body.
 
-### Backend — Pipeline (Phase 6 Final)
+### Backend — Pipeline (Phase 7 Intelligence)
+- `intelligence/enrichment_pipeline.py` - Core orchestrator for all enrichment agents. Runs Gemini-powered divergence analysis and updates signals with 20+ columns.
+- `backend/agents/` - Directory containing `base_agent` (12s timeout, graceful failure, SSE streaming) and 6 enrichment agents (edgar, news, social, insider, congress, divergence, genome) running via `asyncio.gather` for simultaneous execution.
 - `signal_pipeline.py` - Core orchestrator. Event-driven via Registry pattern: `register_processor(type, processor)`. Routes: Classify -> Governance -> Enrich -> Score -> Store.
 - `processors/` - Contains multi-form Gemini prompts. `form_8k.py`, `form_10k.py`, `form_10q.py`, `form_4.py`, `form_sc13d.py`.
 - `governance.py` - 5 validation checks: `CONFIDENCE_FLOOR`, `NEWS_DIVERGENCE`, `KEY_FACTS_PRESENT`, `EVENT_SIGNAL_CONSISTENCY`, `JUNK_FILTER`. Creates audit_trail JSON.
@@ -121,16 +123,21 @@ API maps: `signal` -> `classification`, `company` -> `company_name` via `format_
 | POST | /api/config | Update agent config (Phase 3) |
 | GET | /api/ticker/search | Yahoo Finance ticker search proxy |
 | POST | /api/demo/trigger | Single form-type demo pipeline trigger |
-| POST | /api/demo/trigger-all | Smart trigger: all 5 form types + TG alerts |
+| POST | /api/demo/trigger-all | Smart trigger: all 6 form types + TG alerts |
 | GET | /api/tinyfish/stats | TinyFish extraction statistics |
 | GET | /api/signals/{id} | Full signal with audit trail |
+| GET | /api/leaderboard/divergence | Divergence Leaderboard (deduplicated by ticker) |
+| POST | /api/telegram/connect | Generate per-user Telegram verification code |
+| DELETE | /api/telegram/disconnect | Disconnect per-user Telegram |
+| GET | /api/telegram/status | Check if current user has Telegram connected |
 
 ---
 
-## Pipeline Behavior (Phase 6 Final)
+## Pipeline Behavior (Phase 7 Intelligence)
 
-- Filing received -> SignalPipeline.process() orchestrates all steps
-- Step 1: Form-specific processor (8K/10K/10Q/4/SC13D) calls Gemini 2.5 Flash with chain-of-thought
+- Filing received -> Enrichment pipeline triggers `asyncio.gather` with all 7 agents
+- Step 1: `base_agent` retrieves initial form data with ~12s TinyFish Navigator pattern
+- Step 2: Form-specific processor calls Gemini/Emergent Universal Key with chain-of-thought
 - Step 2: event_classifier maps to taxonomy (deterministic, ~0ms)
 - Step 3: governance.py runs 5 validation checks (confidence floor, news divergence, key facts, event consistency, junk filter)
 - Step 4: market_data fetches price + news (cached, 2s timeout)
@@ -168,4 +175,6 @@ Log format includes accession number, ticker, filing type, company name, and exc
 
 **Phase 6 (Complete):** Multi-form architecture: Form 4 insider processor (buy/sell), 10-K annual report processor, 10-Q quarterly earnings (beat/miss), SC 13D activist filing processor. 5-check governance validation with full audit trail. Chain-of-thought AI reasoning. Smart demo trigger (`trigger-all`) with live SSE logs and Telegram alerts. AlertCard intelligence (WHY line, NEWS DIVERGENCE badge, insider transaction details). 7-category feed. TinyFish stats endpoint. localStorage instant rendering. Gemini SDK migration to `google.genai`.
 
-**Phase 7 (Planned):** S-1 IPO filing support, REST API gateway for Pro-tier, per-user Telegram alerts, Stripe billing, white-label API.
+**Phase 7 (Complete):** Intelligence Agents & Enrichment pipeline. Built `backend/agents/` with 7 concurrent agents (base_agent, edgar, news, social, insider, congress, divergence, genome) using `asyncio.gather`. TinyFish Navigator-only pattern optimizations (~12s lookup + 200ms download). `intelligence/enrichment_pipeline.py` adds 20+ enrichment columns and Gemini divergence analysis. 5-View Navigation (BRIEF, RADAR, INTEL, FEED, ALERTS). Bloomberg-style Signal Cards (divergence, genome alert, 3px confidence bar). Emergent Universal Key fallback for AI classification. Telegram bot HTML fixes and Resend email service integration.
+
+**Phase 8 (Complete):** Polish, Fix & Docs. S-1 IPO filing processor. `USE_TINYFISH` env guard on all agent calls. GenomeAgent as 7th enrichment agent with genome columns (score, trend, pattern_matches, alert). `/api/leaderboard/divergence` endpoint with ticker deduplication. Per-user Telegram: connect/disconnect/status endpoints, `dispatch_signal_alert()` with double-send prevention, `poll_telegram_commands()` background task. `SignalDetailModal.jsx` rewritten with divergence, genome, social, insider, congress, and news enrichment sections. Test files: `test_form_s1.py`, `test_leaderboard.py`. `S-1` added to trigger-all sweep forms.

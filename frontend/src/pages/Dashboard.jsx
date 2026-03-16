@@ -56,6 +56,10 @@ const CATEGORY_MAP = {
   RESTATEMENT: { group: "REGULATORY & LEGAL", priority: 3 },
   ROUTINE_ADMIN: { group: "ROUTINE FILINGS", priority: 4 },
   MATERIAL_EVENT: { group: "ROUTINE FILINGS", priority: 4 },
+  IPO_REGISTRATION: { group: "IPO & OFFERINGS", priority: 1 },
+  IPO_AMENDMENT: { group: "IPO & OFFERINGS", priority: 2 },
+  IPO_POSITIVE: { group: "IPO & OFFERINGS", priority: 1 },
+  IPO_RISK: { group: "IPO & OFFERINGS", priority: 1 },
 };
 
 const GROUP_COLORS = {
@@ -66,6 +70,7 @@ const GROUP_COLORS = {
   'REGULATORY & LEGAL': '#FF3333',
   'ANNUAL REPORTS': '#F59E0B',
   'ROUTINE FILINGS': '#1e1e1e',
+  'IPO & OFFERINGS': '#EC4899',
 };
 
 const getCategory = (signal) => {
@@ -215,6 +220,7 @@ const FeedHeader = ({ filter, setFilter, count, tabCounts, categorizedSignals })
     { label: 'ANNUAL', count: getCount('ANNUAL REPORTS'), color: '#F59E0B' },
     { label: 'LEGAL', count: getCount('REGULATORY & LEGAL'), color: '#FF3333' },
     { label: 'ROUTINE', count: getCount('ROUTINE FILINGS'), color: '#555' },
+    { label: 'IPO', count: getCount('IPO & OFFERINGS'), color: '#EC4899' },
   ].filter(i => i.count > 0);
 
   return (
@@ -343,6 +349,10 @@ const EVENT_META = {
   MATERIAL_EVENT: { label: "Material Event", color: "#FF6B00" },
   DIVIDEND: { label: "Dividend", color: "#00C805" },
   ROUTINE_ADMIN: { label: "Admin 8-K", color: "#252525" },
+  IPO_REGISTRATION: { label: "IPO Filing", color: "#EC4899" },
+  IPO_AMENDMENT: { label: "IPO Amendment", color: "#EC4899" },
+  IPO_POSITIVE: { label: "Strong IPO", color: "#00C805" },
+  IPO_RISK: { label: "Risky IPO", color: "#FF3333" },
 };
 
 const TodayStats = ({ signals }) => {

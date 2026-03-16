@@ -39,15 +39,16 @@ Score above 60 = alert-worthy. Score above 80 = CRITICAL."""
 
 async def run_enrichment_agents(ticker: str, accession_number: str, cik: str,
                                  company_name: str) -> dict:
-    """Fire all 6 enrichment agents simultaneously. Returns dict of all results."""
+    """Fire all 7 enrichment agents simultaneously. Returns dict of all results."""
     from agents.edgar_filing_agent import EdgarFilingAgent
     from agents.news_agent import NewsAgent
     from agents.social_agent import SocialSentimentAgent
     from agents.insider_agent import InsiderTransactionAgent
     from agents.congress_agent import CongressTradingAgent
     from agents.divergence_agent import DivergenceDetectionAgent
+    from agents.genome_agent import GenomeAgent
 
-    logger.info(f"[ENRICHMENT] Firing 6 agents for {ticker}")
+    logger.info(f"[ENRICHMENT] Firing 7 agents for {ticker}")
 
     results = await asyncio.gather(
         EdgarFilingAgent().execute(accession_number=accession_number, cik=cik),
@@ -56,10 +57,11 @@ async def run_enrichment_agents(ticker: str, accession_number: str, cik: str,
         InsiderTransactionAgent().execute(cik=cik, ticker=ticker),
         CongressTradingAgent().execute(ticker=ticker),
         DivergenceDetectionAgent().execute(ticker=ticker, company_name=company_name),
+        GenomeAgent().execute(ticker=ticker, cik=cik),
         return_exceptions=True,
     )
 
-    agent_names = ["edgar", "news", "social", "insider", "congress", "divergence"]
+    agent_names = ["edgar", "news", "social", "insider", "congress", "divergence", "genome"]
     enrichment = {}
     for i, name in enumerate(agent_names):
         r = results[i]
@@ -140,6 +142,7 @@ def build_enrichment_columns(enrichment: dict, divergence_data: dict) -> dict:
     social = enrichment.get("social", {})
     insider = enrichment.get("insider", {})
     congress = enrichment.get("congress", {})
+    genome = enrichment.get("genome", {})
 
     columns = {}
 
@@ -186,5 +189,35 @@ def build_enrichment_columns(enrichment: dict, divergence_data: dict) -> dict:
         columns["contradiction_summary"] = divergence_data.get("contradiction_summary", "")
         columns["public_claim"] = divergence_data.get("public_claim", "")
         columns["filing_reality"] = divergence_data.get("filing_reality", "")
+
+    # Genome
+    if genome:
+        if genome.get("total_filings") is not None:
+            # Calculate genome score from filing patterns
+            total = genome.get("total_filings", 0)
+            amendment_count = genome.get("amendment_count", 0)
+            filing_types = genome.get("filing_types", {})
+            # Score: higher is better (more filings, fewer amendments = healthier pattern)
+            score = min(100, max(0, total * 2 - amendment_count * 10))
+            columns["genome_score"] = score
+            # Trend based on filing regularity
+            if amendment_count > 3:
+                columns["genome_trend"] = "DETERIORATING"
+            elif total >= 20:
+                columns["genome_trend"] = "STABLE"
+            elif total >= 10:
+                columns["genome_trend"] = "IMPROVING"
+            else:
+                columns["genome_trend"] = "STABLE"
+            # Pattern matches from filing type distribution
+            patterns = []
+            for ftype, count in filing_types.items():
+                if count > 0:
+                    similarity = min(100, int(count / max(total, 1) * 200))
+                    patterns.append({"pattern": ftype, "count": count, "similarity": similarity})
+            if patterns:
+                columns["genome_pattern_matches"] = json.dumps(sorted(patterns, key=lambda x: x["count"], reverse=True)[:5])
+            # Alert if amendment ratio is high
+            columns["genome_alert"] = amendment_count > 2 and total > 0
 
     return columns

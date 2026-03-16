@@ -1,20 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 /* Reset */
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
+@layer base {
+  :root, .dark {
+    --background: 0 0% 2%;
+    --foreground: 0 0% 100%;
+    
+    --card: 0 0% 4.7%;
+    --card-foreground: 0 0% 100%;
+    
+    --popover: 0 0% 4.7%;
+    --popover-foreground: 0 0% 100%;
+    
+    --primary: 216 100% 50%;
+    --primary-foreground: 0 0% 100%;
+    
+    --secondary: 0 0% 14.9%;
+    --secondary-foreground: 0 0% 100%;
+    
+    --muted: 0 0% 14.9%;
+    --muted-foreground: 0 0% 63.9%;
+    
+    --accent: 216 100% 50%;
+    --accent-foreground: 0 0% 100%;
+    
+    --destructive: 348 100% 60%;
+    --destructive-foreground: 0 0% 100%;
+    
+    --border: 0 0% 14.9%;
+    --input: 0 0% 14.9%;
+    --ring: 216 100% 50%;
+    
+    --radius: 0.5rem;
+  }
 }
 
-body {
-  background: #050505;
-  color: #fff;
-  font-family: 'JetBrains Mono', monospace;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'JetBrains Mono', monospace;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
 }
 
 a {

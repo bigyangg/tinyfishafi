@@ -44,6 +44,12 @@ class BaseAgent(ABC):
 
     async def call_tinyfish(self, task: str, url: str) -> dict:
         """Make a TinyFish SSE API call. Returns parsed JSON or empty dict."""
+        # Respect USE_TINYFISH flag — return empty dict to trigger graceful fallback
+        use_tinyfish = os.getenv("USE_TINYFISH", "true").lower()
+        if use_tinyfish != "true":
+            logger.info(f"[AGENT {self.name}] USE_TINYFISH is disabled — skipping")
+            return {}
+
         api_key = os.getenv("TINYFISH_API_KEY", "")
         if not api_key:
             logger.warning(f"[AGENT {self.name}] TINYFISH_API_KEY not set")

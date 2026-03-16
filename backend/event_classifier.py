@@ -35,6 +35,10 @@ EVENT_TAXONOMY = {
     "GUIDANCE_RAISE":     {"signal": "Positive", "weight": 75, "keywords": ["raised guidance", "increased guidance", "raised outlook", "upward revision", "raised forecast"]},
     "GUIDANCE_CUT":       {"signal": "Risk",     "weight": 75, "keywords": ["lowered guidance", "cut guidance", "reduced outlook", "downward revision", "lowered forecast"]},
     "ROUTINE_ADMIN":      {"signal": "Neutral",  "weight": 30, "keywords": ["routine", "administrative", "bylaw amendment", "board committee", "annual meeting"]},
+    "IPO_REGISTRATION":   {"signal": "Neutral",  "weight": 85, "keywords": ["ipo", "initial public offering", "registration statement", "s-1", "prospectus", "underwriter", "lock-up", "use of proceeds"]},
+    "IPO_AMENDMENT":      {"signal": "Neutral",  "weight": 70, "keywords": ["ipo amendment", "s-1/a", "amended registration", "revised prospectus"]},
+    "IPO_POSITIVE":       {"signal": "Positive", "weight": 90, "keywords": ["strong ipo", "oversubscribed", "ipo priced above", "raised ipo"]},
+    "IPO_RISK":           {"signal": "Risk",     "weight": 90, "keywords": ["risky ipo", "ipo concern", "ipo delayed", "ipo withdrawn", "going concern ipo"]},
 }
 
 # 8-K item number to human-readable description

@@ -192,6 +192,13 @@ class SignalPipeline:
             self.register_processor("SC 13D", FormSC13DProcessor())
         except Exception as e:
             logger.error(f"[PIPELINE] Failed to register SC 13D processor: {e}")
+
+        try:
+            from processors.form_s1 import FormS1Processor
+            self.register_processor("S-1", FormS1Processor())
+            self.register_processor("S-1/A", FormS1Processor())
+        except Exception as e:
+            logger.error(f"[PIPELINE] Failed to register S-1 processor: {e}")
     
     def register_processor(self, filing_type: str, processor: FilingProcessor):
         """Register a filing processor for a specific filing type."""

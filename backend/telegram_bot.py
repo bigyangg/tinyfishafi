@@ -37,6 +37,10 @@ EVENT_LABELS = {
     "MATERIAL_EVENT":     "Material Event",
     "DIVIDEND":           "Dividend Change",
     "ROUTINE_ADMIN":      "Administrative",
+    "IPO_REGISTRATION":   "IPO Registration",
+    "IPO_AMENDMENT":      "IPO Amendment",
+    "IPO_POSITIVE":       "Strong IPO",
+    "IPO_RISK":           "Risky IPO",
 }
 
 
@@ -200,13 +204,15 @@ def _escape_html(text):
     )
 
 
-def _send_telegram_message(text, parse_mode="HTML"):
-    """Send a message via Telegram Bot API using httpx (sync)."""
+def _send_telegram_message(text, parse_mode="HTML", chat_id_override=None):
+    """Send a message via Telegram Bot API using httpx (sync).
+    Uses chat_id_override if provided, otherwise falls back to global CHAT_ID."""
+    target_chat = chat_id_override or CHAT_ID
     try:
         import httpx
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         payload = {
-            "chat_id": CHAT_ID,
+            "chat_id": target_chat,
             "text": text,
             "parse_mode": parse_mode,
             "disable_web_page_preview": True,
@@ -214,7 +220,7 @@ def _send_telegram_message(text, parse_mode="HTML"):
         with httpx.Client(timeout=10) as client:
             response = client.post(url, json=payload)
             if response.status_code == 200:
-                logger.info(f"Telegram message sent successfully (chat_id={CHAT_ID})")
+                logger.info(f"Telegram message sent successfully (chat_id={target_chat})")
             else:
                 logger.warning(f"Telegram API returned {response.status_code}: {response.text}")
     except Exception as e:
@@ -298,5 +304,161 @@ def send_trigger_summary(ticker: str, company: str, results: list, run_id: str =
         logger.error(f"Failed to send trigger summary: {e}")
 
 
+# ── PER-USER TELEGRAM DISPATCH ──
+
+from collections import deque
+
+_recent_sends = deque(maxlen=500)  # (signal_id, chat_id) pairs for double-send prevention
+
+
+def dispatch_signal_alert(signal_data: dict, supabase_client=None):
+    """Send signal alert to global chat + all registered per-user Telegram chat IDs.
+    Prevents double-sends by tracking recent (signal_id, chat_id) pairs."""
+    if not TELEGRAM_ENABLED:
+        return
+
+    signal_id = signal_data.get("id", "")
+
+    # Build the alert message once
+    ticker = _escape_html(str(signal_data.get("ticker", "???")))
+    signal = signal_data.get("signal", "Neutral")
+    summary = _escape_html(str(signal_data.get("summary", ""))[:150])
+    confidence = signal_data.get("confidence", 0)
+    event_type = str(signal_data.get("event_type", "MATERIAL_EVENT")).replace("_", " ")
+
+    emoji = "🟢" if signal == "Positive" else "🔴" if signal == "Risk" else "⚪"
+
+    message = (
+        f"{emoji} <b>[AFI] {ticker}</b>\n"
+        f"<b>{event_type}</b> — {confidence}% confidence\n\n"
+        f"{summary}\n"
+    )
+
+    # Collect all chat IDs to send to
+    chat_ids = set()
+
+    # Global chat ID (always included)
+    global_chat = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if global_chat:
+        chat_ids.add(global_chat)
+
+    # Per-user chat IDs from Supabase
+    if supabase_client:
+        try:
+            result = supabase_client.table("user_telegram") \
+                .select("telegram_chat_id") \
+                .eq("verified", True) \
+                .execute()
+            for row in (result.data or []):
+                cid = str(row.get("telegram_chat_id", ""))
+                if cid:
+                    chat_ids.add(cid)
+        except Exception as e:
+            logger.warning(f"Failed to fetch per-user Telegram chat IDs: {e}")
+
+    # Send to each chat ID with double-send prevention
+    for chat_id in chat_ids:
+        key = (signal_id, chat_id)
+        if key in _recent_sends:
+            logger.debug(f"Skipping duplicate send: signal={signal_id} chat={chat_id}")
+            continue
+        _recent_sends.append(key)
+        try:
+            _send_telegram_message(message, parse_mode="HTML", chat_id_override=chat_id)
+        except Exception as e:
+            logger.warning(f"Failed to send to chat {chat_id}: {e}")
+
+
+
+
+async def poll_telegram_commands(supabase_client):
+    """Poll for incoming Telegram bot commands (/start, /verify).
+    Runs as a background asyncio task on server startup."""
+    import asyncio
+    import httpx
+
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    if not bot_token:
+        logger.info("[TELEGRAM] No bot token — skipping command polling")
+        return
+
+    last_update_id = 0
+    logger.info("[TELEGRAM] Command polling started")
+
+    while True:
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"https://api.telegram.org/bot{bot_token}/getUpdates",
+                    params={"offset": last_update_id + 1, "timeout": 30},
+                    timeout=35,
+                )
+                if resp.status_code != 200:
+                    await asyncio.sleep(5)
+                    continue
+
+                data = resp.json()
+                for update in data.get("result", []):
+                    last_update_id = update.get("update_id", last_update_id)
+                    msg = update.get("message", {})
+                    text = (msg.get("text") or "").strip()
+                    chat_id = str(msg.get("chat", {}).get("id", ""))
+
+                    if text.startswith("/start"):
+                        _send_telegram_message(
+                            "👋 Welcome to AFI Bot!\n\n"
+                            "To connect your account, use: /verify YOUR_CODE\n"
+                            "Get your verification code from the AFI Settings page.",
+                            chat_id_override=chat_id,
+                        )
+                    elif text.startswith("/verify"):
+                        parts = text.split(maxsplit=1)
+                        code = parts[1].strip() if len(parts) > 1 else ""
+                        if not code:
+                            _send_telegram_message("Usage: /verify YOUR_CODE", chat_id_override=chat_id)
+                            continue
+
+                        # Look up verification code
+                        try:
+                            result = supabase_client.table("telegram_verification_codes") \
+                                .select("user_id") \
+                                .eq("code", code) \
+                                .eq("used", False) \
+                                .limit(1) \
+                                .execute()
+
+                            if result.data and len(result.data) > 0:
+                                user_id = result.data[0]["user_id"]
+                                # Upsert user_telegram row
+                                supabase_client.table("user_telegram").upsert({
+                                    "user_id": user_id,
+                                    "telegram_chat_id": chat_id,
+                                    "verified": True,
+                                }).execute()
+                                # Mark code as used
+                                supabase_client.table("telegram_verification_codes") \
+                                    .update({"used": True}) \
+                                    .eq("code", code) \
+                                    .execute()
+                                _send_telegram_message(
+                                    "✅ Account linked! You'll now receive signal alerts here.",
+                                    chat_id_override=chat_id,
+                                )
+                            else:
+                                _send_telegram_message(
+                                    "❌ Invalid or expired code. Get a new one from Settings.",
+                                    chat_id_override=chat_id,
+                                )
+                        except Exception as e:
+                            logger.error(f"Verification error: {e}")
+                            _send_telegram_message("⚠ Verification failed. Try again.", chat_id_override=chat_id)
+
+        except Exception as e:
+            logger.warning(f"[TELEGRAM] Poll error: {e}")
+
+        await asyncio.sleep(2)
+
+
 if __name__ == "__main__":
     send_test_message()
+
