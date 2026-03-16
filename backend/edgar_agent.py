@@ -460,10 +460,26 @@ class EdgarAgent:
                         f"conf={signal.confidence} | event={signal.event_type} | "
                         f"impact={signal.impact_score}"
                     )
+
+                    # v3: Fire enrichment agents in background
+                    stored_id = result.data[0].get("id") if result.data else None
+                    if stored_id:
+                        import asyncio
+                        import threading
+                        def _run_enrichment(sid, t, acc, cid, cn):
+                            try:
+                                asyncio.run(self._enrich_signal_async(sid, t, acc, cid, cn))
+                            except Exception as e:
+                                logger.warning(f"[ENRICHMENT] Thread failed: {e}")
+                        enrich_thread = threading.Thread(
+                            target=_run_enrichment,
+                            args=(stored_id, signal.ticker, accession_number, str(entity_id), company_name),
+                            daemon=True,
+                        )
+                        enrich_thread.start()
                     
                     # Schedule price tracking
                     if self._price_tracker and result.data:
-                        stored_id = result.data[0].get("id") if result.data else None
                         if stored_id:
                             self._price_tracker.schedule_checks(
                                 signal_id=stored_id,
@@ -603,16 +619,17 @@ class EdgarAgent:
         return ""
 
     def _extract_via_tinyfish(self, filing_url):
-        """Use TinyFish Web Agent API (SSE stream) to navigate and extract filing text."""
+        """Use TinyFish as NAVIGATOR ONLY — finds primary document URL, then backend downloads directly."""
         import requests
         if not self.use_tinyfish or not self.tinyfish_api_key:
             return ""
-            
+
+        # TinyFish navigates the INDEX page to find the primary document URL
         goal = (
-            "Extract the full text content of this SEC 8-K filing. "
-            "Return the complete text of all items disclosed, including any financial figures, "
-            "executive changes, agreements, or events described. "
-            "Return as plain text JSON: {\"text\": \"<full filing content>\"}"
+            "Navigate to this EDGAR filing index page. "
+            "Find the PRIMARY document (the main filing document — NOT exhibits like ex-99, ex-31, ex-32). "
+            "The primary document is the first .htm or .txt file, described with the filing type. "
+            "Return ONLY this JSON: {\"document_url\": \"https://www.sec.gov/Archives/edgar/...\"}"
         )
         try:
             with requests.post(
@@ -627,13 +644,13 @@ class EdgarAgent:
                     "browser_profile": "stealth"
                 },
                 stream=True,
-                timeout=90
+                timeout=30  # 30s max, not 600s
             ) as response:
                 if response.status_code != 200:
                     logger.error(f"[TINYFISH] HTTP {response.status_code}")
                     return ""
-                
-                result_text = ""
+
+                document_url = ""
                 for line in response.iter_lines():
                     line = line.decode("utf-8") if isinstance(line, bytes) else line
                     if not line or not line.startswith("data:"):
@@ -643,33 +660,86 @@ class EdgarAgent:
                         if not raw:
                             continue
                         event = json.loads(raw)
-                        
+
                         if event.get("type") == "PROGRESS":
-                            logger.debug(f"[TINYFISH] Progress: {event.get('message', '')}")
+                            logger.debug(f"[TINYFISH] {event.get('message', '')}")
                         elif event.get("type") == "COMPLETE":
                             if event.get("status") == "COMPLETED":
                                 result = event.get("resultJson") or event.get("result", "")
                                 if isinstance(result, dict):
-                                    result_text = result.get("text", str(result))
+                                    document_url = result.get("document_url", "")
                                 elif isinstance(result, str):
                                     try:
                                         parsed = json.loads(result)
-                                        result_text = parsed.get("text", result)
+                                        document_url = parsed.get("document_url", "")
                                     except json.JSONDecodeError:
-                                        result_text = result
-                                logger.info(f"[TINYFISH] Success: {len(result_text)} chars extracted")
-                            else:
-                                logger.warning(f"[TINYFISH] Run ended with status: {event.get('status')}")
+                                        pass
+                                logger.info(f"[TINYFISH] Navigator found URL: {document_url}")
                             break
                         elif event.get("type") == "ERROR":
-                            logger.error(f"[TINYFISH] Agent error: {event.get('message', event)}")
+                            logger.error(f"[TINYFISH] Error: {event.get('message', event)}")
                             break
                     except json.JSONDecodeError:
                         continue
-                return result_text[:8000]
+
+                # Now download the document directly — fast HTTP, not TinyFish
+                if document_url:
+                    if not document_url.startswith("http"):
+                        document_url = f"https://www.sec.gov{document_url}" if document_url.startswith("/") else ""
+                    if document_url:
+                        try:
+                            doc_resp = requests.get(
+                                document_url,
+                                timeout=10,
+                                headers={"User-Agent": "AFI/1.0 info@afi.com"}
+                            )
+                            if doc_resp.status_code == 200:
+                                logger.info(f"[TINYFISH] Downloaded {len(doc_resp.text)} chars from {document_url}")
+                                return doc_resp.text[:8000]
+                        except Exception as e:
+                            logger.warning(f"[TINYFISH] Document download failed: {e}")
+
+                return ""
         except Exception as e:
-            logger.error(f"[TINYFISH] Extraction failed: {e}")
+            logger.error(f"[TINYFISH] Navigation failed: {e}")
             return ""
+
+    async def _enrich_signal_async(self, signal_id: str, ticker: str,
+                                     accession_number: str, cik: str,
+                                     company_name: str):
+        """Run v3 enrichment agents and update the signal in Supabase."""
+        try:
+            from intelligence.enrichment_pipeline import (
+                run_enrichment_agents, download_document,
+                run_divergence_analysis, build_enrichment_columns
+            )
+            logger.info(f"[ENRICHMENT] Starting for {ticker} signal {signal_id}")
+
+            enrichment = await run_enrichment_agents(ticker, accession_number, cik, company_name)
+
+            # Download document via edgar agent result
+            doc_url = enrichment.get("edgar", {}).get("document_url", "")
+            document_text = await download_document(doc_url)
+
+            # Run divergence analysis
+            ir_text = enrichment.get("divergence", {}).get("latest_statement_text", "")
+            divergence_data = {}
+            if document_text and ir_text:
+                divergence_data = await run_divergence_analysis(document_text, ir_text)
+
+            # Build flat columns for Supabase update
+            columns = build_enrichment_columns(enrichment, divergence_data)
+
+            if columns:
+                self.supabase.table("signals").update(columns).eq("id", signal_id).execute()
+                logger.info(f"[ENRICHMENT] Updated signal {signal_id} with {len(columns)} enrichment fields")
+            else:
+                logger.info(f"[ENRICHMENT] No enrichment data for {signal_id}")
+
+        except Exception as e:
+            logger.error(f"[ENRICHMENT] Failed for {ticker}: {e}", exc_info=True)
+
+
 
     def _extract_via_http(self, filing_url, accession_number, cik):
         """Fallback 2: SEC EDGAR atom feed — gets filing description"""

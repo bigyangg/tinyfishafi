@@ -42,26 +42,21 @@ Classify as Neutral for routine quarterly filings with no surprises."""
 
     def classify(self, filing: RawFiling) -> dict:
         """Classify 10-Q filing with Gemini."""
-        gemini_key = os.environ.get("GEMINI_API_KEY", "")
+        from processors.gemini_helper import call_gemini, has_api_key
 
-        if not gemini_key or gemini_key.startswith("YOUR_"):
+        if not has_api_key():
             return {
                 "ticker": "UNKNOWN", "company": filing.company_name,
                 "summary": "Pending AI classification", "signal": "Pending", "confidence": 0,
             }
 
         try:
-            from google import genai
-            client = genai.Client(api_key=gemini_key)
-
             text = filing.filing_text[:15000] if filing.filing_text else f"10-Q quarterly report by {filing.company_name}"
             prompt = f"{self.SYSTEM_PROMPT}\n\nAnalyze this SEC 10-Q quarterly report:\n\n{text}"
 
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-            )
-            response_text = response.text.strip()
+            response_text = call_gemini(prompt, session_id=f"10q-{filing.accession_number}")
+            if not response_text:
+                raise ValueError("Empty response")
 
             if response_text.startswith("```"):
                 parts = response_text.split("```")

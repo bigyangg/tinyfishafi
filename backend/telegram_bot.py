@@ -142,16 +142,39 @@ def send_signal_alert(signal_data, is_watched=False):
         if impact_score is not None:
             enrichment += f" | Impact: <code>{impact_score}/100</code>"
 
+        # v3 enrichment lines
+        divergence_line = ""
+        div_score = signal_data.get("divergence_score")
+        if div_score and int(div_score) > 60:
+            div_summary = _escape_html(signal_data.get("contradiction_summary", ""))
+            badge = " CRITICAL" if int(div_score) > 80 else ""
+            divergence_line = f"\nDIVERGENCE {div_score}/100{badge}\n{div_summary}"
+
+        genome_line = ""
+        if signal_data.get("genome_alert"):
+            genome_line = "\nGENOME ALERT"
+            matches = signal_data.get("genome_pattern_matches")
+            if matches:
+                import json as _json
+                if isinstance(matches, str):
+                    try:
+                        matches = _json.loads(matches)
+                    except Exception:
+                        matches = []
+                if matches and isinstance(matches, list):
+                    top = matches[0]
+                    genome_line += f" - {top.get('pattern', '')} {top.get('similarity', 0)}% match"
+
         message = (
             f"{watched_line}"
             f"<b>[AFI ALERT]</b>\n\n"
-            f"<b>{ticker}</b> - {filing_type}\n"
-            f"{_escape_html(company)}\n\n"
-            f"Signal: {prefix} <b>{signal}</b>\n"
-            f"{summary}\n\n"
-            f"Confidence: <code>{confidence}%</code> | {date_str}"
+            f"<code>{ticker}</code> - {filing_type}\n"
+            f"Signal: {prefix} <b>{signal}</b> | Confidence: <code>{confidence}%</code>\n\n"
+            f"{summary}\n"
+            f"{divergence_line}"
+            f"{genome_line}"
             f"{enrichment}\n\n"
-            f'<a href="{edgar_url}">View on SEC EDGAR</a>'
+            f'<a href="{edgar_url}">View Filing</a> | {date_str}'
         )
 
         _send_telegram_message(message, parse_mode="HTML")

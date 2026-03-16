@@ -44,26 +44,21 @@ Classify as Neutral for: routine option exercises, small transactions, gifts."""
 
     def classify(self, filing: RawFiling) -> dict:
         """Classify Form 4 filing with Gemini."""
-        gemini_key = os.environ.get("GEMINI_API_KEY", "")
+        from processors.gemini_helper import call_gemini, has_api_key
 
-        if not gemini_key or gemini_key.startswith("YOUR_"):
+        if not has_api_key():
             return {
                 "ticker": "UNKNOWN", "company": filing.company_name,
                 "summary": "Pending AI classification", "signal": "Pending", "confidence": 0,
             }
 
         try:
-            from google import genai
-            client = genai.Client(api_key=gemini_key)
-
             text = filing.filing_text[:10000] if filing.filing_text else f"Form 4 insider filing for {filing.company_name}"
             prompt = f"{self.SYSTEM_PROMPT}\n\nAnalyze this SEC Form 4 insider transaction:\n\n{text}"
 
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-            )
-            response_text = response.text.strip()
+            response_text = call_gemini(prompt, session_id=f"form4-{filing.accession_number}")
+            if not response_text:
+                raise ValueError("Empty response")
 
             if response_text.startswith("```"):
                 parts = response_text.split("```")

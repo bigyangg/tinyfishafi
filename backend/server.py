@@ -181,6 +181,29 @@ def format_signal_for_api(row):
         "form_data": _parse_json(row.get("form_data")),
         "extraction_source": row.get("extraction_source"),
         "extraction_time_ms": row.get("extraction_time_ms"),
+        # v3 enrichment fields
+        "news_dominant_theme": row.get("news_dominant_theme"),
+        "reddit_sentiment": row.get("reddit_sentiment"),
+        "stocktwits_sentiment": row.get("stocktwits_sentiment"),
+        "social_volume_spike": row.get("social_volume_spike"),
+        "social_vs_filing_delta": row.get("social_vs_filing_delta"),
+        "insider_net_30d": row.get("insider_net_30d"),
+        "insider_net_90d": row.get("insider_net_90d"),
+        "insider_ceo_activity": row.get("insider_ceo_activity"),
+        "insider_unusual_delay": row.get("insider_unusual_delay"),
+        "congress_net_sentiment": row.get("congress_net_sentiment"),
+        "congress_trades": _parse_json(row.get("congress_trades")),
+        "congress_suspicious_timing": row.get("congress_suspicious_timing"),
+        "congress_timing_note": row.get("congress_timing_note"),
+        "divergence_score": row.get("divergence_score"),
+        "divergence_severity": row.get("divergence_severity"),
+        "contradiction_summary": row.get("contradiction_summary"),
+        "public_claim": row.get("public_claim"),
+        "filing_reality": row.get("filing_reality"),
+        "genome_score": row.get("genome_score"),
+        "genome_trend": row.get("genome_trend"),
+        "genome_pattern_matches": _parse_json(row.get("genome_pattern_matches")),
+        "genome_alert": row.get("genome_alert"),
     }
     return result
 
@@ -895,7 +918,7 @@ async def health_check():
 async def root():
     return {"status": "ok", "service": "AFI API", "database": "supabase"}
 
-# ============ TELEGRAM TEST ============
+# ============ TELEGRAM TEST + SETUP ============
 @api_router.post("/telegram/test")
 async def telegram_test():
     try:
@@ -908,6 +931,167 @@ async def telegram_test():
     except Exception as e:
         logger.error(f"Telegram test failed: {e}")
         return {"status": "error", "message": str(e)}
+
+@api_router.get("/telegram/setup")
+async def telegram_setup():
+    """Returns first available chat_id from getUpdates."""
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    if not bot_token:
+        return {"error": "TELEGRAM_BOT_TOKEN not set"}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"https://api.telegram.org/bot{bot_token}/getUpdates")
+            data = resp.json()
+            if data.get("ok") and data.get("result"):
+                for update in data["result"]:
+                    chat = update.get("message", {}).get("chat", {})
+                    if chat.get("id"):
+                        return {"chat_id": chat["id"], "chat_type": chat.get("type"), "username": chat.get("username", "")}
+            return {"error": "No messages found. Send /start to your bot first.", "raw": data.get("result", [])}
+    except Exception as e:
+        return {"error": str(e)}
+
+# ============ EMAIL TEST ============
+@api_router.post("/email/test")
+async def email_test():
+    """Sends test email, returns success/failure."""
+    try:
+        from email_service import send_signal_alert
+        test_signal = {
+            "ticker": "TEST",
+            "signal": "Positive",
+            "confidence": 85,
+            "summary": "This is a test email from AFI. If you received this, email alerts are working.",
+            "filing_type": "8-K",
+            "event_type": "MATERIAL_EVENT",
+            "impact_score": 72,
+        }
+        digest_email = os.environ.get("DIGEST_EMAIL", "")
+        if not digest_email:
+            return {"status": "error", "message": "DIGEST_EMAIL not configured in .env"}
+        success = send_signal_alert(test_signal, to_email=digest_email)
+        if success:
+            return {"status": "sent", "message": f"Test email sent to {digest_email}"}
+        return {"status": "failed", "message": "Email send failed — check RESEND_API_KEY"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# ============ GENOME ENDPOINTS ============
+@api_router.get("/genomes")
+async def get_genomes():
+    """Get all company genomes."""
+    try:
+        result = supabase.table("company_genomes").select("*").order("genome_score", desc=True).execute()
+        return {"genomes": result.data or []}
+    except Exception as e:
+        logger.error(f"Failed to fetch genomes: {e}")
+        return {"genomes": [], "error": str(e)}
+
+@api_router.get("/genomes/{ticker}")
+async def get_genome(ticker: str):
+    """Get genome for a specific ticker."""
+    try:
+        result = supabase.table("company_genomes").select("*").eq("ticker", ticker.upper()).execute()
+        if result.data:
+            return result.data[0]
+        return {"error": "No genome found for this ticker"}
+    except Exception as e:
+        return {"error": str(e)}
+
+# ============ COMPANY DOSSIER (INTEL VIEW) ============
+@api_router.get("/intel/{ticker}")
+async def get_intel(ticker: str):
+    """Full intelligence dossier for a company."""
+    ticker = ticker.upper()
+    try:
+        signals_result = supabase.table("signals").select("*").eq("ticker", ticker).order("filed_at", desc=True).limit(20).execute()
+        genome_result = supabase.table("company_genomes").select("*").eq("ticker", ticker).execute()
+
+        signals = [format_signal_for_api(row) for row in (signals_result.data or [])]
+        genome = genome_result.data[0] if genome_result.data else None
+
+        return {
+            "ticker": ticker,
+            "signals": signals,
+            "genome": genome,
+            "signal_count": len(signals),
+        }
+    except Exception as e:
+        return {"ticker": ticker, "signals": [], "genome": None, "error": str(e)}
+
+# ============ RADAR VIEW (upcoming filings) ============
+@api_router.get("/migrate")
+async def get_migration_sql():
+    """Returns the SQL that needs to be run in Supabase SQL Editor for v3 upgrade."""
+    return {
+        "message": "Run this SQL in your Supabase SQL Editor (Dashboard > SQL Editor > New Query)",
+        "sql": """
+CREATE TABLE IF NOT EXISTS company_genomes (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  ticker TEXT UNIQUE NOT NULL,
+  cik TEXT,
+  genome_data JSONB,
+  genome_score INTEGER,
+  genome_trend TEXT CHECK (genome_trend IN ('IMPROVING', 'STABLE', 'DETERIORATING', 'CRITICAL')),
+  pattern_matches JSONB,
+  genome_alert BOOLEAN DEFAULT false,
+  last_updated TIMESTAMPTZ DEFAULT now(),
+  filing_history_analyzed INTEGER
+);
+
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS news_dominant_theme TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS reddit_sentiment NUMERIC;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS stocktwits_sentiment NUMERIC;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS social_volume_spike BOOLEAN;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS social_vs_filing_delta TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS insider_net_30d NUMERIC;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS insider_net_90d NUMERIC;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS insider_ceo_activity TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS insider_unusual_delay BOOLEAN;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS congress_net_sentiment TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS congress_trades JSONB;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS congress_suspicious_timing BOOLEAN;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS congress_timing_note TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS divergence_score INTEGER;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS divergence_severity TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS contradiction_summary TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS public_claim TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS filing_reality TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS genome_score INTEGER;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS genome_trend TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS genome_pattern_matches JSONB;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS genome_alert BOOLEAN;
+""",
+    }
+
+
+@api_router.get("/radar")
+async def get_radar():
+    """Get upcoming expected filings and earnings calendar data."""
+    try:
+        # Get recent signals to predict upcoming filings
+        result = supabase.table("signals").select("ticker, filing_type, filed_at").order("filed_at", desc=True).limit(100).execute()
+        signals = result.data or []
+
+        # Group by ticker and predict next filing
+        upcoming = []
+        seen = set()
+        for s in signals:
+            ticker = s.get("ticker", "")
+            if ticker in seen or not ticker:
+                continue
+            seen.add(ticker)
+            filing_type = s.get("filing_type", "8-K")
+            filed_at = s.get("filed_at", "")
+            upcoming.append({
+                "ticker": ticker,
+                "last_filing_type": filing_type,
+                "last_filed_at": filed_at,
+            })
+
+        return {"upcoming": upcoming[:20]}
+    except Exception as e:
+        return {"upcoming": [], "error": str(e)}
 
 # ============ AI BRIEF ============
 _brief_cache = {"text": None, "timestamp": 0, "signal_count": 0}
@@ -948,7 +1132,9 @@ async def get_brief():
         context = "\n".join(signal_summaries)
 
         gemini_key = os.environ.get("GEMINI_API_KEY", "")
-        if not gemini_key or gemini_key.startswith("YOUR_"):
+        emergent_key = os.environ.get("EMERGENT_LLM_KEY", "")
+
+        if (not gemini_key or gemini_key.startswith("YOUR_") or gemini_key.startswith("your-")) and not emergent_key:
             positive = sum(1 for s in signals if s.get("signal") == "Positive")
             risk = sum(1 for s in signals if s.get("signal") == "Risk")
             neutral = sum(1 for s in signals if s.get("signal") == "Neutral")
@@ -956,17 +1142,23 @@ async def get_brief():
             _brief_cache = {"text": brief, "timestamp": now, "signal_count": current_count}
             return {"brief": brief, "signal_count": len(signals)}
 
-        import google.generativeai as genai
-        genai.configure(api_key=gemini_key)
-        model = genai.GenerativeModel('gemini-2.5-flash')
-
         prompt = f"""You are a financial intelligence analyst. Given these latest SEC 8-K filing signals, write exactly 3 sentences summarizing the market intelligence. Be concise, professional, and specific. Reference company names and signal types. No bullet points, no headers, just 3 sentences.
 
 Signals:
 {context}"""
 
-        response = model.generate_content(prompt)
-        brief_text = response.text.strip()
+        brief_text = ""
+        if emergent_key:
+            from emergentintegrations.llm.chat import LlmChat, UserMessage
+            chat = LlmChat(api_key=emergent_key, session_id="daily-brief", system_message="You are a financial intelligence analyst.")
+            chat.with_model("gemini", "gemini-2.5-flash")
+            brief_text = chat.send_message_sync(UserMessage(text=prompt))
+        else:
+            import google.generativeai as genai
+            genai.configure(api_key=gemini_key)
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            response = model.generate_content(prompt)
+            brief_text = response.text.strip()
 
         _brief_cache = {"text": brief_text, "timestamp": now, "signal_count": current_count}
         return {"brief": brief_text, "signal_count": len(signals), "cached": False}
@@ -1067,6 +1259,76 @@ async def cleanup_seed_data():
     except Exception as e:
         logger.error(f"Seed cleanup error: {e}")
 
+
+async def run_schema_migration():
+    """Add v3 enrichment columns to signals table."""
+    # Log what SQL the user needs to run in Supabase dashboard
+    migration_sql = """
+-- AFI v3 Migration: Run this in Supabase SQL Editor
+-- 1. Create company_genomes table
+CREATE TABLE IF NOT EXISTS company_genomes (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  ticker TEXT UNIQUE NOT NULL,
+  cik TEXT,
+  genome_data JSONB,
+  genome_score INTEGER,
+  genome_trend TEXT CHECK (genome_trend IN ('IMPROVING', 'STABLE', 'DETERIORATING', 'CRITICAL')),
+  pattern_matches JSONB,
+  genome_alert BOOLEAN DEFAULT false,
+  last_updated TIMESTAMPTZ DEFAULT now(),
+  filing_history_analyzed INTEGER
+);
+
+-- 2. Add v3 enrichment columns to signals table
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS event_type TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS impact_score TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS early_warning_score INTEGER;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS news_dominant_theme TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS reddit_sentiment NUMERIC;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS stocktwits_sentiment NUMERIC;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS social_volume_spike BOOLEAN;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS social_vs_filing_delta TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS insider_net_30d NUMERIC;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS insider_net_90d NUMERIC;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS insider_ceo_activity TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS insider_unusual_delay BOOLEAN;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS congress_net_sentiment TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS congress_trades JSONB;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS congress_suspicious_timing BOOLEAN;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS congress_timing_note TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS divergence_score INTEGER;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS divergence_severity TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS contradiction_summary TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS public_claim TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS filing_reality TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS genome_score INTEGER;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS genome_trend TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS genome_pattern_matches JSONB;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS genome_alert BOOLEAN;
+"""
+    logger.info("[MIGRATION] Schema migration SQL ready. Run /api/migrate to see SQL.")
+    logger.info("[MIGRATION] Checking table access...")
+    try:
+        result = supabase.table("signals").select("id").limit(1).execute()
+        logger.info("[MIGRATION] signals table accessible")
+    except Exception as e:
+        logger.warning(f"[MIGRATION] signals table warning: {e}")
+
+    try:
+        result = supabase.table("company_genomes").select("id").limit(1).execute()
+        logger.info("[MIGRATION] company_genomes table accessible")
+    except Exception as e:
+        logger.warning(f"[MIGRATION] company_genomes not found — run migration SQL in Supabase dashboard")
+
+async def run_genome_backfill():
+    """Run genome backfill for Tier 1 companies in background."""
+    try:
+        from intelligence.genome_engine import backfill_genomes
+        await backfill_genomes(supabase)
+    except Exception as e:
+        logger.error(f"[GENOME] Backfill error: {e}")
+
+
 # ============ APP SETUP ============
 app.include_router(api_router)
 app.add_middleware(
@@ -1108,6 +1370,16 @@ async def startup_event():
         logger.info("EDGAR agent auto-started on server boot (pipeline + price tracker)")
     except Exception as e:
         logger.error(f"Failed to auto-start EDGAR agent: {e}")
+
+    # Step 3: Run Supabase schema migration for v3 enrichment columns
+    try:
+        await run_schema_migration()
+    except Exception as e:
+        logger.warning(f"Schema migration warning: {e}")
+
+    # Step 4: Genome backfill for Tier 1 companies (non-blocking)
+    import asyncio
+    asyncio.create_task(run_genome_backfill())
 
 @app.on_event("shutdown")
 async def shutdown_event():

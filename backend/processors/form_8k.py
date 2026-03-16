@@ -43,11 +43,11 @@ IMPORTANT classification rules:
 - Revenue reported below expectations → EARNINGS_MISS (Risk)"""
 
     def classify(self, filing: RawFiling) -> dict:
-        """Classify 8-K filing with Gemini."""
-        gemini_key = os.environ.get("GEMINI_API_KEY", "")
+        """Classify 8-K filing with Gemini (via Emergent key fallback)."""
+        from processors.gemini_helper import call_gemini, has_api_key
 
-        if not gemini_key or gemini_key.startswith("YOUR_"):
-            logger.warning("[PIPELINE] GEMINI_API_KEY missing — returning Pending")
+        if not has_api_key():
+            logger.warning("[PIPELINE] No API key available — returning Pending")
             return {
                 "ticker": "UNKNOWN",
                 "company": filing.company_name,
@@ -56,18 +56,14 @@ IMPORTANT classification rules:
                 "confidence": 0,
             }
 
+        text = filing.filing_text[:12000] if filing.filing_text else f"8-K filing by {filing.company_name}"
+        prompt = f"{self.SYSTEM_PROMPT}\n\nAnalyze this SEC 8-K filing:\n\n{text}"
+
         try:
-            from google import genai
-            client = genai.Client(api_key=gemini_key)
+            response_text = call_gemini(prompt, session_id=f"8k-{filing.accession_number}")
 
-            text = filing.filing_text[:12000] if filing.filing_text else f"8-K filing by {filing.company_name}"
-            prompt = f"{self.SYSTEM_PROMPT}\n\nAnalyze this SEC 8-K filing:\n\n{text}"
-
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-            )
-            response_text = response.text.strip()
+            if not response_text:
+                raise ValueError("Empty response from AI")
 
             # Parse JSON from response
             if response_text.startswith("```"):

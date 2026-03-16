@@ -1,0 +1,69 @@
+{
+  "timestamp": "2026-03-16T06:31:16.975924",
+  "base_url": "https://97c7bf2d-8799-47ab-ac7d-1cafcb0cb811.preview.emergentagent.com/api",
+  "total_tests": 10,
+  "passed_tests": 10,
+  "success_rate": 100.0,
+  "test_results": [
+    {
+      "test": "Health endpoint",
+      "passed": true,
+      "details": "Status: ok",
+      "timestamp": "2026-03-16T06:31:12.400345"
+    },
+    {
+      "test": "Auth login",
+      "passed": true,
+      "details": "Existing user logged in successfully",
+      "timestamp": "2026-03-16T06:31:13.459001"
+    },
+    {
+      "test": "Migration SQL",
+      "passed": true,
+      "details": "SQL contains required tables",
+      "timestamp": "2026-03-16T06:31:13.512687"
+    },
+    {
+      "test": "Telegram setup",
+      "passed": true,
+      "details": "Response: {'error': 'No messages found. Send /start to your bot first.', 'raw': []}",
+      "timestamp": "2026-03-16T06:31:13.930316"
+    },
+    {
+      "test": "Signals endpoint",
+      "passed": true,
+      "details": "Found 50 signals, v3 fields: True",
+      "timestamp": "2026-03-16T06:31:14.610056"
+    },
+    {
+      "test": "Radar endpoint",
+      "passed": true,
+      "details": "Found 20 upcoming filings",
+      "timestamp": "2026-03-16T06:31:14.967163"
+    },
+    {
+      "test": "Intel TSLA",
+      "passed": true,
+      "details": "Ticker: TSLA, Signals: 0, Genome: False",
+      "timestamp": "2026-03-16T06:31:15.483921"
+    },
+    {
+      "test": "Genomes endpoint",
+      "passed": true,
+      "details": "Found 0 genomes",
+      "timestamp": "2026-03-16T06:31:15.772497"
+    },
+    {
+      "test": "Brief endpoint",
+      "passed": true,
+      "details": "Brief length: 45, Signals: 0",
+      "timestamp": "2026-03-16T06:31:16.509476"
+    },
+    {
+      "test": "Demo trigger AAPL",
+      "passed": true,
+      "details": "Message: Pipeline running for AAPL. Signal appears in ~30s.",
+      "timestamp": "2026-03-16T06:31:16.975783"
+    }
+  ]
+}

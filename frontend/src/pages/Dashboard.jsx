@@ -1,4 +1,4 @@
-// Dashboard.jsx — Live filing feed + right panel
+// Dashboard.jsx — Live filing feed + right panel + 5-view navigation
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
@@ -9,6 +9,10 @@ import AlertCard from '../components/AlertCard';
 import SignalDetailModal from '../components/SignalDetailModal';
 import { SignalSkeleton, StatsSkeleton, WatchlistSkeleton } from '../components/SignalSkeleton';
 import { usePushNotifications } from '../hooks/usePushNotifications';
+import BriefView from '../components/views/BriefView';
+import RadarView from '../components/views/RadarView';
+import IntelView from '../components/views/IntelView';
+import AlertsView from '../components/views/AlertsView';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -714,6 +718,7 @@ export default function Dashboard() {
   const [feedFilter, setFeedFilter] = useState('ALL');
   const [selectedSignal, setSelectedSignal] = useState(null);
   const [newSignalIds, setNewSignalIds] = useState(new Set());
+  const [activeView, setActiveView] = useState('FEED');
 
   // Browser push notifications
   const { requestPermission, notifyNewSignal } = usePushNotifications();
@@ -732,7 +737,7 @@ export default function Dashboard() {
   const [briefTimestamp, setBriefTimestamp] = useState(null);
   const [briefAge, setBriefAge] = useState(0);
 
-  // Format row
+  // Format row — v3 enriched fields
   const formatSignalRow = useCallback((row) => ({
     id: row.id || '',
     ticker: row.ticker || '',
@@ -746,6 +751,34 @@ export default function Dashboard() {
     edgar_url: row.edgar_url || '',
     event_type: row.event_type || null,
     impact_score: row.impact_score || null,
+    key_facts: row.key_facts || null,
+    form_data: row.form_data || null,
+    run_id: row.run_id || null,
+    news_sentiment: row.news_sentiment || null,
+    sentiment_match: row.sentiment_match || null,
+    // v3 enrichment
+    news_headlines: row.news_headlines || null,
+    news_dominant_theme: row.news_dominant_theme || null,
+    reddit_sentiment: row.reddit_sentiment || null,
+    stocktwits_sentiment: row.stocktwits_sentiment || null,
+    social_volume_spike: row.social_volume_spike || null,
+    social_vs_filing_delta: row.social_vs_filing_delta || null,
+    insider_net_30d: row.insider_net_30d || null,
+    insider_net_90d: row.insider_net_90d || null,
+    insider_ceo_activity: row.insider_ceo_activity || null,
+    insider_unusual_delay: row.insider_unusual_delay || null,
+    congress_net_sentiment: row.congress_net_sentiment || null,
+    congress_trades: row.congress_trades || null,
+    congress_suspicious_timing: row.congress_suspicious_timing || null,
+    divergence_score: row.divergence_score || null,
+    divergence_severity: row.divergence_severity || null,
+    contradiction_summary: row.contradiction_summary || null,
+    public_claim: row.public_claim || null,
+    filing_reality: row.filing_reality || null,
+    genome_score: row.genome_score || null,
+    genome_trend: row.genome_trend || null,
+    genome_pattern_matches: row.genome_pattern_matches || null,
+    genome_alert: row.genome_alert || null,
   }), []);
 
   // Check health + agent status now in AppShell
@@ -997,11 +1030,53 @@ export default function Dashboard() {
   return (
     <AppShell>
 
+      {/* 5-VIEW NAVIGATION BAR */}
+      <div data-testid="nav-bar" style={{
+        display: 'flex', alignItems: 'center', gap: '2px',
+        padding: '0 16px', height: '40px', flexShrink: 0,
+        background: '#050505', borderBottom: '1px solid #111',
+      }}>
+        {['BRIEF', 'RADAR', 'INTEL', 'FEED', 'ALERTS'].map(v => (
+          <button
+            key={v}
+            data-testid={`nav-${v.toLowerCase()}`}
+            onClick={() => setActiveView(v)}
+            style={{
+              padding: '8px 16px',
+              background: activeView === v ? '#111' : 'transparent',
+              border: activeView === v ? '1px solid #1a1a1a' : '1px solid transparent',
+              borderBottom: activeView === v ? '2px solid #0066FF' : '2px solid transparent',
+              color: activeView === v ? '#fff' : '#444',
+              fontSize: '10px', fontWeight: 700, letterSpacing: '0.08em',
+              cursor: 'pointer', fontFamily: "'JetBrains Mono', monospace",
+              transition: 'all 120ms',
+            }}
+          >
+            {v}
+          </button>
+        ))}
+        <div style={{ flex: 1 }} />
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '6px',
+          padding: '4px 10px',
+          background: '#00C80510', border: '1px solid #00C80520',
+        }}>
+          <div style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#00C805', animation: 'pulse-green 2s ease-in-out infinite' }} />
+          <span style={{ fontSize: '9px', color: '#00C805', letterSpacing: '0.06em', fontWeight: 600 }}>LIVE</span>
+        </div>
+      </div>
 
+      {/* VIEW CONTENT */}
+      {activeView === 'BRIEF' && <BriefView authHeaders={authHeaders} />}
+      {activeView === 'RADAR' && <RadarView />}
+      {activeView === 'INTEL' && <IntelView watchlist={watchlist} />}
+      {activeView === 'ALERTS' && <AlertsView />}
+
+      {activeView === 'FEED' && (
       <div style={{
         display: 'grid',
         gridTemplateColumns: '1fr 260px',
-        height: '100%',
+        height: 'calc(100% - 40px)',
         overflow: 'hidden',
       }}>
 
@@ -1105,6 +1180,7 @@ export default function Dashboard() {
           />
         )}
       </div>
+      )}
     </AppShell>
   );
 }
