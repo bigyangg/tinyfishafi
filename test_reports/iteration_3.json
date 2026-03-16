@@ -1,0 +1,55 @@
+{
+  "summary": "Completed comprehensive testing of AFI landing page redesign and dashboard 5-view navigation. All major features working correctly with 100% backend API success rate.",
+  "backend_issues": {
+    "critical_bugs": [],
+    "flaky_endpoints": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "minor_warnings": [
+      {
+        "component": "Dashboard signals feed",
+        "issue": "React console warnings about duplicate keys for NVDA ticker",
+        "impact": "No functional impact, cosmetic console warning only",
+        "fix_priority": "LOW"
+      }
+    ]
+  },
+  "passed_tests": [
+    "Landing page loads at root URL /",
+    "Landing page has navbar with AFI branding and EDGAR LIVE status", 
+    "Landing page hero section shows 'We Catch Companies Lying' headline",
+    "Landing page has ACCESS TERMINAL and SEE THE PIPELINE buttons",
+    "Landing page live signal ribbon shows real signals with 29 ticker symbols",
+    "Landing page Intelligence Pipeline section has 5 equal columns (DETECT, EXTRACT, CLASSIFY, ENRICH, ALERT)",
+    "Landing page 7 Agents section shows all 7 agents (EDGAR, NEWS, SOCIAL, INSIDER, CONGRESS, DIVERGENCE, GENOME)",
+    "Landing page divergence section shows 'When CEOs lie, we know'",
+    "Landing page shows live signal cards from real API",
+    "Landing page final CTA section shows 'Stop Guessing. Start Knowing.'",
+    "LOG IN button navigates to /auth",
+    "ACCESS TERMINAL button navigates to /auth?mode=signup",
+    "Dashboard 5-view navigation works (BRIEF, RADAR, INTEL, FEED, ALERTS)",
+    "API health endpoint returns OK",
+    "All backend endpoints functional (10/10 tests passed)",
+    "Dashboard login with demo credentials working",
+    "INTEL view search functionality working",
+    "ALERTS view controls (Telegram test, Email test, Confidence slider, Setup button) working",
+    "Signal cards display and watch functionality working",
+    "Real-time signal feed integration working"
+  ],
+  "test_report_links": [
+    "/app/backend_test.py",
+    "/app/test_reports/backend_api_results.json"
+  ],
+  "action_item_for_main_agent": "",
+  "updated_files": [],
+  "success_percentage": {
+    "backend": "100% (10/10 tests passed)",
+    "frontend": "100% (all landing page and dashboard features working)",
+    "integration": "100% (frontend-backend integration fully functional)"
+  },
+  "should_call_test_agent_after_fix": "false",
+  "should_main_agent_test_itself": "false"
+}
