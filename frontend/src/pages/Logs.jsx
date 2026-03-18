@@ -2,7 +2,6 @@
 // Professional two-panel layout: run history + live log stream grouped by run_id
 
 import { useState, useEffect, useRef, useMemo } from 'react';
-import AppShell from '../components/AppShell';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -143,8 +142,8 @@ export default function Logs() {
     const totalErrors = sortedRuns.reduce((a, r) => a + r.errors, 0);
 
     return (
-        <AppShell>
-            <div style={shell}>
+        <>
+        <div style={shell}>
 
                 {/* ── TOP HEADER ── */}
                 <div style={header}>
@@ -329,19 +328,18 @@ export default function Logs() {
                             })}
                         </div>
                     </div>
+                    <style>{`
+                        @keyframes pulse {
+                            0%, 100% { opacity: 1; }
+                            50%       { opacity: 0.2; }
+                        }
+                        *::-webkit-scrollbar { width: 4px; }
+                        *::-webkit-scrollbar-track { background: transparent; }
+                        *::-webkit-scrollbar-thumb { background: #1a1a1a; border-radius: 2px; }
+                    `}</style>
                 </div>
             </div>
-
-            <style>{`
-                @keyframes pulse {
-                    0%, 100% { opacity: 1; }
-                    50%       { opacity: 0.2; }
-                }
-                *::-webkit-scrollbar { width: 4px; }
-                *::-webkit-scrollbar-track { background: transparent; }
-                *::-webkit-scrollbar-thumb { background: #1a1a1a; border-radius: 2px; }
-            `}</style>
-        </AppShell>
+        </>
     );
 }
 

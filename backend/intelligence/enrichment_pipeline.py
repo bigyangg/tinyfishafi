@@ -47,8 +47,9 @@ async def run_enrichment_agents(ticker: str, accession_number: str, cik: str,
     from agents.congress_agent import CongressTradingAgent
     from agents.divergence_agent import DivergenceDetectionAgent
     from agents.genome_agent import GenomeAgent
+    from agents.options_agent import OptionsActivityAgent
 
-    logger.info(f"[ENRICHMENT] Firing 7 agents for {ticker}")
+    logger.info(f"[ENRICHMENT] Firing 8 agents for {ticker}")
 
     results = await asyncio.gather(
         EdgarFilingAgent().execute(accession_number=accession_number, cik=cik),
@@ -58,10 +59,11 @@ async def run_enrichment_agents(ticker: str, accession_number: str, cik: str,
         CongressTradingAgent().execute(ticker=ticker),
         DivergenceDetectionAgent().execute(ticker=ticker, company_name=company_name),
         GenomeAgent().execute(ticker=ticker, cik=cik),
+        OptionsActivityAgent().execute(ticker=ticker),
         return_exceptions=True,
     )
 
-    agent_names = ["edgar", "news", "social", "insider", "congress", "divergence", "genome"]
+    agent_names = ["edgar", "news", "social", "insider", "congress", "divergence", "genome", "options"]
     enrichment = {}
     for i, name in enumerate(agent_names):
         r = results[i]
@@ -143,6 +145,7 @@ def build_enrichment_columns(enrichment: dict, divergence_data: dict) -> dict:
     insider = enrichment.get("insider", {})
     congress = enrichment.get("congress", {})
     genome = enrichment.get("genome", {})
+    options_data = enrichment.get("options", {})
 
     columns = {}
 
@@ -219,5 +222,12 @@ def build_enrichment_columns(enrichment: dict, divergence_data: dict) -> dict:
                 columns["genome_pattern_matches"] = json.dumps(sorted(patterns, key=lambda x: x["count"], reverse=True)[:5])
             # Alert if amendment ratio is high
             columns["genome_alert"] = amendment_count > 2 and total > 0
+
+    # Options activity
+    if options_data:
+        columns["options_activity"] = json.dumps(options_data)
+        pcr = options_data.get("put_call_ratio")
+        if pcr is not None:
+            columns["put_call_ratio"] = float(pcr)
 
     return columns

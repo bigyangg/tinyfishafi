@@ -2,9 +2,9 @@
 
 ## Overview
 
-AFI (Market Event Intelligence) is a real-time signal platform for traders. It polls SEC EDGAR continuously, detects new filings (8-K, 10-K, 10-Q, 4, SC 13D), classifies market events with Gemini 2.5 Flash, applies 5-stage governance validation, enriches with price data, scores impact (0–100), and delivers structured signals through a live dashboard, Telegram alerts, and server-sent events (SSE) logs.
+AFI (Market Event Intelligence) is a real-time signal platform for traders. It polls SEC EDGAR continuously, detects new filings (8-K, 10-K, 10-Q, 4, SC 13D, S-1, NT 10-K, NT 10-Q, DEF 14A, 8-K/A, CORRESP), classifies market events with Gemini 2.5 Flash, applies 5-stage governance validation, enriches with 8 concurrent agents, scores impact (0–100), and delivers structured signals through a live dashboard, Telegram alerts, and server-sent events (SSE) logs.
 
-**Current state:** Phase 7 Intelligence & Enrichment complete. Includes concurrent enrichment agents (news, social, insider, congress, divergence, genome), rigorous JSON governance to prevent AI hallucinations, real-time pipeline log streaming via SSE, and an updated frontend with 5-View Navigation (BRIEF, RADAR, INTEL, FEED, ALERTS) and Bloomberg-style Signal Cards.
+**Current state:** Phase 10 — Stability, AI Quality & Theme System complete. Adds dead-letter queue with retry, structured Gemini output schema, earnings quantification, options activity agent, short interest enrichment, dynamic poll intervals, EDGAR thread resilience, full CSS variable theme system with dark/light toggle, single-mount AppShell architecture eliminating navigation freeze, and Graph historical signal timeline.
 
 ---
 
@@ -12,12 +12,14 @@ AFI (Market Event Intelligence) is a real-time signal platform for traders. It p
 
 ```
 FastAPI (port 8001) <-> Supabase (PostgreSQL + Auth + Realtime)
-EDGAR Agent (120s loop) -> SEC EDGAR -> Multi-Form Pipeline -> Governance Validation -> Score -> Store -> Alert
+EDGAR Agent (dynamic interval: 45-300s) -> SEC EDGAR -> Multi-Form Pipeline -> Governance -> Score -> Store -> Alert
 Text Extraction: TinyFish -> SEC EFTS full-text -> HTTP scrape (follow_redirects)
-Ticker Resolution: CIK -> data.sec.gov/submissions/CIK{padded}.json -> ticker
-Signal Pipeline: Classify (Gemini) -> Taxonomy -> Enrich (Yahoo) -> Score -> Store -> Alert
+Ticker Resolution: SEC JSON -> yfinance search -> UNKNOWN__<CIK> fallback (never drops a filing)
+Content Dedup: SHA-256(filing_text[:5000]) checked against signals.content_hash before processing
+Dead-Letter Queue: failed_filings table + 10-min retry loop (exponential backoff, max 3 attempts)
+Signal Pipeline: Classify (Gemini structured JSON) -> Taxonomy -> Enrich (8 agents) -> Score -> Store -> Alert
 Price Tracker (300s loop) -> Yahoo Finance -> price_correlations table
-React (port 3000) -> Supabase Realtime + /api/* REST
+React (port 3000) -> AppDataProvider (single Supabase subscription) -> AppLayout (single AppShell) -> Pages
 ```
 
 All backend routes use the `/api/` prefix.
@@ -27,44 +29,59 @@ All backend routes use the `/api/` prefix.
 ## Key Files
 
 ### Backend — Core
-- `server.py` - FastAPI app. Signal/watchlist CRUD, SSE stream (`/api/logs/stream`), demo triggers (`/api/demo/trigger`, `/api/demo/trigger-all`), TinyFish stats, agent control. Auto-starts EDGAR agent and wires SSE queue to pipeline on boot. Wraps expensive synchronous AI workflows in `asyncio.to_thread` to maintain loop health.
-- `edgar_agent.py` - Autonomous SEC poller. Multi-form support (8-K, 10-K, 10-Q, 4, SC 13D). **3-step extraction fallback** (TinyFish -> SEC EFTS -> HTTP scrape). Emits logs to SSE stream. delegates to SignalPipeline.
-- `telegram_bot.py` - Smart Telegram alerts with multi-factor thresholds. Supports inline links without HTML symbol errors. Extracts and prints individual intelligence events directly in the chat body.
+- `server.py` - FastAPI app. Signal/watchlist CRUD, SSE stream (`/api/logs/stream`), demo triggers (`/api/demo/trigger`, `/api/demo/trigger-all`), dead-letter queue (`/api/failed-filings`), TinyFish stats, agent control. Auto-starts EDGAR agent with connectivity check and logs `=== AFI SERVER READY ===` on success. Wraps expensive synchronous AI workflows in `asyncio.to_thread`.
+- `edgar_agent.py` - Autonomous SEC poller. Monitors 11 form types. Dynamic poll interval via `get_poll_interval()` (45/90/60/300s by market hour). **3-step ticker fallback**: SEC JSON → yfinance search → `UNKNOWN__<CIK>`. **Content hash dedup**: skips filings with duplicate SHA-256. Thread uses `_stop_event.wait()` chunked sleep so `stop()` interrupts within 1s. `get_status()` uses `thread.is_alive()` — never lies about agent state. `check_edgar_connectivity()` called at startup.
+- `telegram_bot.py` - Smart Telegram alerts with multi-factor thresholds. Double-send prevention. Per-user verified chat dispatch.
 
-### Backend — Pipeline (Phase 7 Intelligence)
-- `intelligence/enrichment_pipeline.py` - Core orchestrator for all enrichment agents. Runs Gemini-powered divergence analysis and updates signals with 20+ columns.
-- `backend/agents/` - Directory containing `base_agent` (12s timeout, graceful failure, SSE streaming) and 6 enrichment agents (edgar, news, social, insider, congress, divergence, genome) running via `asyncio.gather` for simultaneous execution.
-- `signal_pipeline.py` - Core orchestrator. Event-driven via Registry pattern: `register_processor(type, processor)`. Routes: Classify -> Governance -> Enrich -> Score -> Store.
-- `processors/` - Contains multi-form Gemini prompts. `form_8k.py`, `form_10k.py`, `form_10q.py`, `form_4.py`, `form_sc13d.py`.
-- `governance.py` - 5 validation checks: `CONFIDENCE_FLOOR`, `NEWS_DIVERGENCE`, `KEY_FACTS_PRESENT`, `EVENT_SIGNAL_CONSISTENCY`, `JUNK_FILTER`. Creates audit_trail JSON.
-- `event_classifier.py` - Deterministic taxonomy mapper for legacy processing.
-- `market_data.py` - Yahoo Finance wrapper. 5-minute TTL cache.
-- `sentiment_analyzer.py` - Option A: filing signal vs current news tone. Keyword-based scoring. Returns delta, news score, match boolean.
-- `impact_engine.py` - Rule-based composite scoring: 40% confidence + 30% event weight + 20% sentiment + 10% watchlist boost. `should_alert()` used by Telegram gate.
-- `price_tracker.py` - Scheduled T+1h/T+24h/T+3d price checks. Database rows, not asyncio.sleep. Survives restarts.
+### Backend — Pipeline
+- `intelligence/enrichment_pipeline.py` - Orchestrator for 8 concurrent agents (added `OptionsActivityAgent`). Runs Gemini divergence analysis and maps 30+ enrichment columns.
+- `intelligence/tinyfish_context.py` - Fire-and-forget Deep Context extractor: entities, financial figures, forward guidance, risk language via SEC EFTS.
+- `backend/agents/` - `base_agent` (12s timeout, graceful failure) + 8 agents: edgar, news, social, insider, congress, divergence, genome, **options**. All run via `asyncio.gather`.
+- `signal_pipeline.py` - Registry pattern orchestrator. Wraps `_process_inner()` in try/except; on failure inserts to `failed_filings`. Tracks `current_stage` for error attribution. Registers: 8-K, 10-K, 10-Q, 4, SC 13D, S-1, NT 10-K, NT 10-Q, 8-K/A.
+- `processors/form_8k.py` - Structured Gemini schema + earnings quantification (EPS, revenue, guidance fields).
+- `processors/form_10q.py` - Structured Gemini schema + earnings quantification (9 financial metric fields).
+- `processors/form_10k.py`, `form_4.py`, `form_sc13d.py`, `form_s1.py` - All use enforced `response_schema` with `response_mime_type="application/json"`.
+- `processors/form_nt.py` - **New.** NT 10-K / NT 10-Q processor. Always returns Risk signal (85–92% confidence). Extracts late-filing reason and severity flags (restatement, going_concern, sec_investigation, material_weakness).
+- `processors/gemini_helper.py` - `call_gemini_with_retry()`: 3-attempt exponential backoff on 429/rate-limit errors.
+- `governance.py` - 5 validation checks: CONFIDENCE_FLOOR, NEWS_DIVERGENCE, KEY_FACTS_PRESENT, EVENT_SIGNAL_CONSISTENCY, JUNK_FILTER.
+- `market_data.py` - Yahoo Finance wrapper. 5-min TTL cache. Added `get_short_interest()` returning `short_percent_float`, `short_ratio`, `shares_short`.
+- `sentiment_analyzer.py` - Filing signal vs current news tone. Returns delta, news score, match boolean.
+- `impact_engine.py` - Composite scoring: 40% confidence + 30% event weight + 20% sentiment + 10% watchlist boost.
+- `price_tracker.py` - T+1h/T+24h/T+3d price checks. Database rows, survives restarts.
 
 ### Frontend
-- `App.js` - Client-side routing: `/`, `/dashboard`, `/watchlist`, `/signal/:id`, `/settings`, `/logs`, `/runs`.
-- `AppShell.jsx` - Shared layout shell with sidebar navigation, agent status bar.
-- `Dashboard.jsx` - Categorized feed. `CATEGORY_MAP` handles 7 groups. `CategorySection` accordion headers. **Instant rendering via localStorage cache**. Right sidebar includes the **Smart Demo Trigger panel**.
-- `Runs.jsx` - High-level executive dashboard for tracking the results and yield of historical pipeline sweeps.
-- `Logs.jsx` - Live terminal-like SSE viewer connecting to `/api/logs/stream`. Color coded by pipeline step for debugging.
-- `Signal.jsx` - Deep-dive audit trail. Renders Chain of Thought, Key Facts, Governance checkboxes, Impact Score table, News Cross-Check, and Form Data grid. Fetches via `GET /api/signals/:id`.
-- `Watchlist.jsx` - Watchlist management with inline filing expand. Clicking a filing opens `/signal/:id` in new tab.
-- `Settings.jsx` - User settings page.
-- `SignalSkeleton.jsx` - Shimmer loading placeholders (SignalSkeleton, StatsSkeleton, WatchlistSkeleton).
-- `WatchlistPanel.jsx` - Ticker management via **backend proxy** (`/api/ticker/search`). Autocomplete dropdown.
-- `SignalDetailModal.jsx` - Full signal detail overlay with **event type**, **impact score bar**, SEC EDGAR link.
-- `DashboardSidebar.jsx` - Navigation with Sign Out + Telegram test.
-- `hooks/usePushNotifications.js` - Browser notification hook. Requests permission, fires native notifications when tab not visible.
-- `public/sw.js` - Service worker for background push notification events.
-- `AuthContext.jsx` - Supabase Auth state.
-- `lib/supabase.js` - Supabase client singleton.
+- `App.js` - Routes via `AppLayout` (single persistent `AppShell` via React Router `Outlet`). `AppDataProvider` wraps the router. Public routes: `/`, `/auth`.
+- `context/AppDataContext.jsx` - **Global persistent state.** Single Supabase Realtime subscription (never torn down). Polls `edgar/status` every 20s, `health` every 30s. Caches signals + agent status in localStorage. `backendOnline` requires 2 consecutive failures before showing offline. All protected pages read from this context.
+- `context/AuthContext.jsx` - Supabase Auth state.
+- `components/AppShell.jsx` - Layout shell. Mounts **once** (via `AppLayout`). Reads `agentStatus`, `backendOnline`, `filedToday`, `nextPoll` from `AppDataContext`. Theme toggle (☀/☾) persisted to localStorage. `useEffect` keeps `body.theme-light` class in sync with `isLight` state.
+- `pages/Dashboard.jsx` - 5-view navigation (BRIEF/RADAR/INTEL/FEED/ALERTS). Uses `useAppData()` — no local signal fetching. `CATEGORY_MAP` → 7 accordion groups.
+- `pages/Graph.jsx` - Force-graph with CSS-variable colors, theme-aware canvas node labels, sector filter pills, **historical signal timeline** on node click (fetches last 5 signals), zoom-to-fit button, dot-grid background.
+- `pages/Leaderboard.jsx` - Divergence leaderboard with CRITICAL/HIGH/MEDIUM/LOW severity badges.
+- `pages/Logs.jsx`, `Runs.jsx`, `Watchlist.jsx`, `Settings.jsx`, `Signal.jsx` - All use `useAppData()`, no AppShell wrapper (provided by AppLayout).
+- `components/AlertCard.jsx` - `React.memo` with custom comparator (id + user_correction + impact_score). All colors via CSS variables.
+- `components/MarketPulse.jsx`, `SignalDetailModal.jsx`, `TinyFishContext.jsx`, `RippleDrawer.jsx`, `SignalSkeleton.jsx` - All CSS-variable themed.
+- `public/index.html` - Anti-flash inline script: applies `theme-light` class before React loads if localStorage preference is set.
+- `index.css` - `:root` dark tokens, `body.theme-light` light tokens (no `@media prefers-color-scheme` — manual toggle only). Tailwind `--background`/`--foreground` synced to theme.
 
 ### Environment Variables
 **Backend (.env):** `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `TINYFISH_API_KEY`, `GEMINI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `USE_TINYFISH`, `TELEGRAM_ENABLED`, `CORS_ORIGINS`, `RESEND_API_KEY` (optional), `DIGEST_EMAIL` (optional), `FRONTEND_URL` (optional)
 
 **Frontend (.env):** `REACT_APP_SUPABASE_URL`, `REACT_APP_SUPABASE_ANON_KEY`, `REACT_APP_BACKEND_URL`
+
+---
+
+## Claude Code Agents
+
+AFI uses a structured **Multi-Agent Orchestration Protocol** via Claude Code. Instead of treating Claude as a single general-purpose assistant, invoke specific **Custom Agents** tailored to architectural domains.
+
+### Active Agents (`.claude/agents/`)
+1. **`afi-principal-architect`**: The top-level orchestrator. Invoke this for cross-cutting concerns, system-wide upgrades, or major debugging efforts. It understands the interaction between async backend, React frontend, and AI pipelines.
+2. **`afi-backend-engineer`**: Focuses on `server.py`, `edgar_agent.py`, `signal_pipeline.py`, and async fastAPI latency/fault tolerance.
+3. **`afi-frontend-engineer`**: Focuses on React rendering performance, Supabase Realtime consistency, and the strict design system.
+4. **`afi-ai-systems-engineer`**: Focuses on Gemini prompts, deterministic classification, zero-hallucination governance, and TinyFish extraction accuracy.
+5. **`afi-qa-reliability`**: Focuses on test coverage, regression prevention, failure injection, and end-to-end simulation.
+
+**Usage:** When starting Claude Code in the terminal (`claude`), use the `/agent` command to switch to the appropriate persona, or ask the Principal Architect to coordinate a sub-agent for the task.
 
 ---
 
@@ -130,6 +147,10 @@ API maps: `signal` -> `classification`, `company` -> `company_name` via `format_
 | POST | /api/telegram/connect | Generate per-user Telegram verification code |
 | DELETE | /api/telegram/disconnect | Disconnect per-user Telegram |
 | GET | /api/telegram/status | Check if current user has Telegram connected |
+| GET | /api/signals/{id}/context | Async Deep Context (TinyFish) extraction for entities and forward guidance |
+| GET | /api/signals/{id}/ripple | Supply chain and peer correlation effect generator |
+| GET | /api/correlations/graph | Full force-graph network data structure for God's View |
+| GET | /api/market/pulse | Market stress score calculation (0-100 index) |
 
 ---
 
@@ -178,3 +199,5 @@ Log format includes accession number, ticker, filing type, company name, and exc
 **Phase 7 (Complete):** Intelligence Agents & Enrichment pipeline. Built `backend/agents/` with 7 concurrent agents (base_agent, edgar, news, social, insider, congress, divergence, genome) using `asyncio.gather`. TinyFish Navigator-only pattern optimizations (~12s lookup + 200ms download). `intelligence/enrichment_pipeline.py` adds 20+ enrichment columns and Gemini divergence analysis. 5-View Navigation (BRIEF, RADAR, INTEL, FEED, ALERTS). Bloomberg-style Signal Cards (divergence, genome alert, 3px confidence bar). Emergent Universal Key fallback for AI classification. Telegram bot HTML fixes and Resend email service integration.
 
 **Phase 8 (Complete):** Polish, Fix & Docs. S-1 IPO filing processor. `USE_TINYFISH` env guard on all agent calls. GenomeAgent as 7th enrichment agent with genome columns (score, trend, pattern_matches, alert). `/api/leaderboard/divergence` endpoint with ticker deduplication. Per-user Telegram: connect/disconnect/status endpoints, `dispatch_signal_alert()` with double-send prevention, `poll_telegram_commands()` background task. `SignalDetailModal.jsx` rewritten with divergence, genome, social, insider, congress, and news enrichment sections. Test files: `test_form_s1.py`, `test_leaderboard.py`. `S-1` added to trigger-all sweep forms.
+
+**Phase 9 (Complete):** Deep Context & Global UI. Async Deep Context Enrichment (`tinyfish_context.py` + `TinyFishContext.jsx`) for entities, financial figures, forward guidance, and risk language. "God's View" Correlation Network (`Graph.jsx` + `/api/correlations/graph`) rendering 2D force-directed macro dependencies. Market Pulse (`MarketPulse.jsx` + `/api/market/pulse`) 0-100 real-time market stress index. Sector Ripple Drawer (`RippleDrawer.jsx` + `/api/signals/{id}/ripple`) for supply chain impact tracking.

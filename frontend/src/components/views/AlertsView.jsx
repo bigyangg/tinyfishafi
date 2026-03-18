@@ -57,22 +57,22 @@ export default function AlertsView() {
   const ToggleRow = ({ label, enabled, onToggle, testFn, testLabel, status, statusLabel }) => (
     <div style={{
       display: 'flex', alignItems: 'center', gap: '12px',
-      padding: '16px', background: '#080808', border: '1px solid #141414',
+      padding: '16px', background: 'var(--bg-card)', border: '1px solid var(--border-default)',
       marginBottom: '8px',
     }}>
       <div style={{
         width: '8px', height: '8px', borderRadius: '50%',
-        background: enabled ? '#00C805' : '#333',
+        background: enabled ? 'var(--signal-positive)' : 'var(--text-tertiary)',
       }} />
-      <span style={{ fontSize: '12px', fontWeight: 600, color: '#aaa', flex: 1, letterSpacing: '0.04em' }}>
+      <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', flex: 1, letterSpacing: '0.04em' }}>
         {label}
       </span>
       <button
         onClick={onToggle}
         style={{
-          padding: '4px 12px', background: enabled ? '#0066FF15' : '#111',
-          border: `1px solid ${enabled ? '#0066FF40' : '#1a1a1a'}`,
-          color: enabled ? '#0066FF' : '#444',
+          padding: '4px 12px', background: enabled ? 'var(--accent-blue-bg)' : 'var(--bg-hover)',
+          border: `1px solid ${enabled ? 'var(--accent-blue-border)' : 'var(--border-default)'}`,
+          color: enabled ? 'var(--accent-blue)' : 'var(--text-muted)',
           fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em',
           cursor: 'pointer', fontFamily: "'JetBrains Mono', monospace",
         }}
@@ -85,8 +85,8 @@ export default function AlertsView() {
           onClick={testFn}
           disabled={testing === testLabel}
           style={{
-            padding: '4px 12px', background: '#111',
-            border: '1px solid #1a1a1a', color: '#555',
+            padding: '4px 12px', background: 'var(--bg-hover)',
+            border: '1px solid var(--border-default)', color: 'var(--text-tertiary)',
             fontSize: '9px', letterSpacing: '0.06em', cursor: 'pointer',
             fontFamily: "'JetBrains Mono', monospace",
           }}
@@ -97,7 +97,7 @@ export default function AlertsView() {
       {status && (
         <span style={{
           fontSize: '9px', fontFamily: "'JetBrains Mono', monospace",
-          color: status.status === 'sent' ? '#00C805' : '#FF3333',
+          color: status.status === 'sent' ? 'var(--signal-positive)' : 'var(--signal-risk)',
         }}>
           {status.status === 'sent' ? 'SENT' : status.message?.slice(0, 30)}
         </span>
@@ -108,7 +108,7 @@ export default function AlertsView() {
   return (
     <div data-testid="alerts-view" style={{ padding: '24px 20px', maxWidth: '600px', margin: '0 auto' }}>
       <div style={{
-        fontSize: '10px', color: '#333', letterSpacing: '0.12em', fontWeight: 600,
+        fontSize: '10px', color: 'var(--text-tertiary)', letterSpacing: '0.12em', fontWeight: 600,
         fontFamily: "'JetBrains Mono', monospace", marginBottom: '24px',
       }}>
         ALERT SETTINGS
@@ -144,24 +144,24 @@ export default function AlertsView() {
 
       {/* Telegram Setup */}
       <div style={{
-        margin: '24px 0', padding: '16px', background: '#060606', border: '1px solid #111',
+        margin: '24px 0', padding: '16px', background: 'var(--bg-card)', border: '1px solid var(--border-default)',
       }}>
-        <div style={{ fontSize: '9px', color: '#333', letterSpacing: '0.1em', marginBottom: '12px' }}>
+        <div style={{ fontSize: '9px', color: 'var(--text-tertiary)', letterSpacing: '0.1em', marginBottom: '12px' }}>
           TELEGRAM SETUP
         </div>
         <button
           data-testid="telegram-setup-btn"
           onClick={setupTelegram}
           style={{
-            padding: '8px 16px', background: '#111', border: '1px solid #1a1a1a',
-            color: '#666', fontSize: '10px', cursor: 'pointer',
+            padding: '8px 16px', background: 'var(--bg-hover)', border: '1px solid var(--border-default)',
+            color: 'var(--text-secondary)', fontSize: '10px', cursor: 'pointer',
             fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.04em',
           }}
         >
           GET CHAT ID
         </button>
         {chatId && (
-          <div style={{ marginTop: '8px', fontSize: '11px', color: '#0066FF', fontFamily: "'JetBrains Mono', monospace" }}>
+          <div style={{ marginTop: '8px', fontSize: '11px', color: 'var(--accent-blue)', fontFamily: "'JetBrains Mono', monospace" }}>
             Chat ID: {chatId}
           </div>
         )}
@@ -169,13 +169,13 @@ export default function AlertsView() {
 
       {/* Confidence threshold */}
       <div style={{
-        padding: '16px', background: '#080808', border: '1px solid #141414',
+        padding: '16px', background: 'var(--bg-card)', border: '1px solid var(--border-default)',
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-          <span style={{ fontSize: '10px', color: '#444', letterSpacing: '0.1em', fontWeight: 600 }}>
+          <span style={{ fontSize: '10px', color: 'var(--text-muted)', letterSpacing: '0.1em', fontWeight: 600 }}>
             CONFIDENCE THRESHOLD
           </span>
-          <span style={{ fontSize: '14px', fontWeight: 700, color: '#fff', fontFamily: "'JetBrains Mono', monospace" }}>
+          <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'JetBrains Mono', monospace" }}>
             {threshold}%
           </span>
         </div>
@@ -188,15 +188,15 @@ export default function AlertsView() {
           onChange={e => setThreshold(parseInt(e.target.value))}
           style={{
             width: '100%', height: '3px',
-            appearance: 'none', background: '#1a1a1a',
+            appearance: 'none', background: 'var(--border-default)',
             outline: 'none', cursor: 'pointer',
           }}
         />
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '6px' }}>
-          <span style={{ fontSize: '8px', color: '#222' }}>0%</span>
-          <span style={{ fontSize: '8px', color: '#222' }}>100%</span>
+          <span style={{ fontSize: '8px', color: 'var(--text-muted)' }}>0%</span>
+          <span style={{ fontSize: '8px', color: 'var(--text-muted)' }}>100%</span>
         </div>
-        <p style={{ fontSize: '10px', color: '#333', marginTop: '8px' }}>
+        <p style={{ fontSize: '10px', color: 'var(--text-tertiary)', marginTop: '8px' }}>
           Only receive alerts when signal confidence exceeds {threshold}%
         </p>
       </div>

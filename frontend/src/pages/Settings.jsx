@@ -1,7 +1,6 @@
 // Settings.jsx — Account, notifications, and alert configuration
 import { useState } from 'react';
 import axios from 'axios';
-import AppShell from '../components/AppShell';
 import { useAuth } from '../context/AuthContext';
 import { usePushNotifications } from '../hooks/usePushNotifications';
 
@@ -99,7 +98,6 @@ export default function Settings() {
     };
 
     return (
-        <AppShell>
             <div style={{ flex: 1, overflowY: 'auto', padding: '24px 32px', maxWidth: '560px' }}>
 
                 <h1 style={{ fontSize: '13px', color: '#fff', letterSpacing: '0.1em', marginBottom: '32px', fontWeight: 700 }}>
@@ -166,6 +164,5 @@ export default function Settings() {
                 </div>
 
             </div>
-        </AppShell>
     );
 }

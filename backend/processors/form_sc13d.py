@@ -19,15 +19,10 @@ class FormSC13DProcessor(FilingProcessor):
   "summary": "one sentence: who acquired >5%, their intent, stake size — max 25 words",
   "signal": "Positive or Neutral or Risk",
   "confidence": integer 0-100,
-  "chain_of_thought": {
-    "step1_what_happened": "describe the ownership stake acquisition",
-    "step2_who_is_affected": "the filer and their known history",
-    "step3_historical_context": "is this filer known as an activist investor?",
-    "step4_bull_case": "why activist involvement could unlock value",
-    "step5_bear_case": "why this could create uncertainty or hostile pressure",
-    "step6_final_reasoning": "your final reasoning for the signal"
-  },
+  "chain_of_thought": ["step1: describe ownership stake acquisition", "step2: filer history", "step3: activist track record", "step4: bull case", "step5: bear case", "step6: final reasoning"],
   "key_facts": ["filer name", "ownership percentage", "stated intent"],
+  "event_type": "one of: ACTIVIST_STAKE, PASSIVE_STAKE, HOSTILE_TAKEOVER, BOARD_DEMAND, MERGER_PROPOSAL, STAKE_INCREASE, STAKE_DECREASE",
+  "risk_factors": ["risk 1", "risk 2"],
   "form_data": {
     "filer_name": "name of the beneficial owner / fund",
     "ownership_pct": "percentage of shares owned",
@@ -40,6 +35,33 @@ class FormSC13DProcessor(FilingProcessor):
 Classify as Positive if: well-known activist investor pushing for value creation, merger proposal.
 Classify as Risk if: hostile takeover attempt, unknown entity acquiring large stake, potential dilution concern.
 Classify as Neutral for: passive investment, routine 13D amendments with no change in intent."""
+
+    RESPONSE_SCHEMA = {
+        "type": "OBJECT",
+        "properties": {
+            "ticker": {"type": "STRING"},
+            "company": {"type": "STRING"},
+            "signal": {"type": "STRING", "enum": ["Positive", "Neutral", "Risk"]},
+            "confidence": {"type": "INTEGER"},
+            "summary": {"type": "STRING"},
+            "event_type": {"type": "STRING"},
+            "key_facts": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "risk_factors": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "chain_of_thought": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "form_data": {
+                "type": "OBJECT",
+                "properties": {
+                    "filer_name": {"type": "STRING"},
+                    "ownership_pct": {"type": "STRING"},
+                    "shares_held": {"type": "STRING"},
+                    "intent": {"type": "STRING"},
+                    "is_activist": {"type": "BOOLEAN"},
+                    "is_new_position": {"type": "BOOLEAN"},
+                },
+            },
+        },
+        "required": ["signal", "confidence", "summary", "event_type"],
+    }
 
     def classify(self, filing: RawFiling) -> dict:
         """Classify SC 13D filing with Gemini."""
@@ -55,7 +77,11 @@ Classify as Neutral for: passive investment, routine 13D amendments with no chan
             text = filing.filing_text[:12000] if filing.filing_text else f"SC 13D filing for {filing.company_name}"
             prompt = f"{self.SYSTEM_PROMPT}\n\nAnalyze this SEC SC 13D beneficial ownership filing:\n\n{text}"
 
-            response_text = call_gemini(prompt, session_id=f"sc13d-{filing.accession_number}")
+            response_text = call_gemini(
+                prompt,
+                session_id=f"sc13d-{filing.accession_number}",
+                response_schema=self.RESPONSE_SCHEMA,
+            )
             if not response_text:
                 raise ValueError("Empty response")
 
@@ -75,6 +101,8 @@ Classify as Neutral for: passive investment, routine 13D amendments with no chan
                 "confidence": min(100, max(0, int(result.get("confidence", 50)))),
                 "chain_of_thought": result.get("chain_of_thought"),
                 "key_facts": result.get("key_facts", []),
+                "event_type": result.get("event_type"),
+                "risk_factors": result.get("risk_factors", []),
                 "form_data": result.get("form_data"),
             }
         except json.JSONDecodeError as e:

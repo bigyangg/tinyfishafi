@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import AppShell from '../components/AppShell';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -24,8 +23,8 @@ export default function Runs() {
     const SIG_COLOR = { Positive: '#00C805', Neutral: '#888', Risk: '#FF3333' };
 
     return (
-        <AppShell>
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#020202', overflow: 'hidden' }}>
+        <>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#020202', overflow: 'hidden' }}>
 
                 {/* ── HEADER ── */}
                 <div style={{
@@ -184,15 +183,14 @@ export default function Runs() {
                             })}
                         </div>
                     )}
+                    <style>{`
+                        @keyframes sk {
+                            0%, 100% { opacity: 1; }
+                            50% { opacity: 0.3; }
+                        }
+                    `}</style>
                 </div>
             </div>
-
-            <style>{`
-                @keyframes sk {
-                    0%, 100% { opacity: 1; }
-                    50% { opacity: 0.3; }
-                }
-            `}</style>
-        </AppShell>
+        </>
     );
 }

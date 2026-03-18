@@ -2,7 +2,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import AppShell from '../components/AppShell';
 import { useAuth } from '../context/AuthContext';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
@@ -103,7 +102,7 @@ export default function Watchlist() {
     };
 
     return (
-        <AppShell>
+        <>
             <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
 
                 {/* PAGE HEADER */}
@@ -255,7 +254,7 @@ export default function Watchlist() {
                 .filing-row:hover { background: #0a0a0a !important; }
                 .filing-row:hover .view-hint { color: #0066FF !important; }
             `}</style>
-        </AppShell>
+        </>
     );
 }
 

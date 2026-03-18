@@ -131,6 +131,25 @@ class MarketDataService:
         self._price_cache.clear()
         self._news_cache.clear()
     
+    def get_short_interest(self, ticker: str) -> dict:
+        """Get current short interest data from Yahoo Finance"""
+        ticker = ticker.upper().strip()
+        if not ticker or ticker == "UNKNOWN":
+            return {}
+        try:
+            import yfinance as yf
+            stock = yf.Ticker(ticker)
+            info = stock.info
+            short_pct = info.get("shortPercentOfFloat", None)
+            return {
+                "short_percent_float": round(short_pct * 100, 2) if short_pct else None,
+                "short_ratio": info.get("shortRatio", None),  # days to cover
+                "shares_short": info.get("sharesShort", None),
+            }
+        except Exception as e:
+            logger.warning(f"Short interest lookup failed for {ticker}: {e}")
+            return {}
+
     def get_cache_stats(self) -> dict:
         """Return cache statistics for monitoring."""
         now = time.time()

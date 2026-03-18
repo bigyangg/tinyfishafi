@@ -4,39 +4,109 @@
 
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
-/* Reset */
-@layer base {
-  :root, .dark {
-    --background: 0 0% 2%;
-    --foreground: 0 0% 100%;
-    
-    --card: 0 0% 4.7%;
-    --card-foreground: 0 0% 100%;
-    
-    --popover: 0 0% 4.7%;
-    --popover-foreground: 0 0% 100%;
-    
-    --primary: 216 100% 50%;
-    --primary-foreground: 0 0% 100%;
-    
-    --secondary: 0 0% 14.9%;
-    --secondary-foreground: 0 0% 100%;
-    
-    --muted: 0 0% 14.9%;
-    --muted-foreground: 0 0% 63.9%;
-    
-    --accent: 216 100% 50%;
-    --accent-foreground: 0 0% 100%;
-    
-    --destructive: 348 100% 60%;
-    --destructive-foreground: 0 0% 100%;
-    
-    --border: 0 0% 14.9%;
-    --input: 0 0% 14.9%;
-    --ring: 216 100% 50%;
-    
-    --radius: 0.5rem;
-  }
+/* ─────────────────────────────────────────────────────────────────────── */
+/* DESIGN TOKENS - Theme Variables */
+/* ─────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* Base colors */
+  --bg-base: #0F1117;
+  --bg-surface: #141824;
+  --bg-card: #141824;
+  --bg-sidebar: #0A0D14;
+  --bg-hover: #1A2035;
+  --bg-active: #1A2744;
+
+  /* Borders */
+  --border-default: #1E2330;
+  --border-strong: #2D3748;
+
+  /* Text */
+  --text-primary: #E2E8F0;
+  --text-secondary: #94A3B8;
+  --text-tertiary: #64748B;
+  --text-muted: #475569;
+
+  /* Accent */
+  --accent-blue: #3B82F6;
+  --accent-blue-bg: #1A2744;
+  --accent-blue-border: #2D5A9E;
+
+  /* Signals */
+  --signal-positive: #34D399;
+  --signal-positive-bg: #0D2E1A;
+  --signal-risk: #F87171;
+  --signal-risk-bg: #2E0D0D;
+  --signal-neutral: #94A3B8;
+
+  /* Filing types */
+  --filing-8k: #60A5FA;
+  --filing-10k: #FBBF24;
+  --filing-10q: #34D399;
+  --filing-form4: #C084FC;
+  --filing-sc13d: #FB923C;
+  --filing-s1: #22D3EE;
+
+  /* Tailwind overrides (kept for compatibility) — dark mode defaults */
+  --background: 222 47% 7%;
+  --foreground: 214 32% 91%;
+  --card: 0 0% 4.7%;
+  --card-foreground: 0 0% 100%;
+  --popover: 0 0% 4.7%;
+  --popover-foreground: 0 0% 100%;
+  --primary: 216 100% 50%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 0 0% 14.9%;
+  --secondary-foreground: 0 0% 100%;
+  --muted: 0 0% 14.9%;
+  --muted-foreground: 0 0% 63.9%;
+  --accent: 216 100% 50%;
+  --accent-foreground: 0 0% 100%;
+  --destructive: 348 100% 60%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 0 0% 14.9%;
+  --input: 0 0% 14.9%;
+  --ring: 216 100% 50%;
+  --radius: 0.5rem;
+}
+
+/* Light theme via body.theme-light class — higher specificity for correct override */
+body.theme-light {
+  --bg-base: #F8F9FB;
+  --bg-surface: #FFFFFF;
+  --bg-card: #FFFFFF;
+  --bg-sidebar: #FFFFFF;
+  --bg-hover: #F1F5F9;
+  --bg-active: #EFF6FF;
+
+  --border-default: #DDE1E9;
+  --border-strong: #CBD5E1;
+
+  --text-primary: #1E2330;
+  --text-secondary: #64748B;
+  --text-tertiary: #94A3B8;
+  --text-muted: #CBD5E1;
+
+  --accent-blue: #1D4ED8;
+  --accent-blue-bg: #EFF6FF;
+  --accent-blue-border: #BFDBFE;
+
+  --signal-positive: #15803D;
+  --signal-positive-bg: #DCFCE7;
+  --signal-risk: #B91C1C;
+  --signal-risk-bg: #FEE2E2;
+  --signal-neutral: #64748B;
+
+  --filing-8k: #1D4ED8;
+  --filing-10k: #B45309;
+  --filing-10q: #15803D;
+  --filing-form4: #6D28D9;
+  --filing-sc13d: #C2410C;
+  --filing-s1: #0E7490;
+
+  /* Tailwind overrides for light mode */
+  --background: 210 40% 98%;
+  --foreground: 222 47% 11%;
 }
 
 @layer base {
@@ -45,6 +115,8 @@
   }
   body {
     @apply bg-background text-foreground;
+    background-color: var(--bg-base);
+    color: var(--text-primary);
     font-family: 'JetBrains Mono', monospace;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -67,7 +139,7 @@ a {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #1a1a1a;
+  background: var(--border-default);
 }
 
 /* Focus */
@@ -76,7 +148,8 @@ button:focus {
 }
 
 button:focus-visible {
-  outline: 1px solid rgba(0, 102, 255, 0.25);
+  outline: 1px solid var(--accent-blue);
+  opacity: 0.25;
 }
 
 input:focus {
@@ -85,14 +158,13 @@ input:focus {
 
 /* Animations */
 @keyframes pulse-green {
-
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(0, 200, 5, 0.12);
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.12);
   }
 
   50% {
-    box-shadow: 0 0 0 3px rgba(0, 200, 5, 0.03);
+    box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.03);
   }
 }
 

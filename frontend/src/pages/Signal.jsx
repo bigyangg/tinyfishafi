@@ -3,7 +3,6 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import axios from 'axios';
-import AppShell from '../components/AppShell';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -37,19 +36,16 @@ export default function Signal() {
 
     if (loading) {
         return (
-            <AppShell>
                 <div style={{ padding: '32px', animation: 'fadeIn 300ms' }}>
                     <div style={{ width: '60px', height: '20px', background: '#0a0a0a', animation: 'sk 1.5s ease infinite', marginBottom: '16px' }} />
                     <div style={{ width: '200px', height: '12px', background: '#0a0a0a', animation: 'sk 1.5s ease infinite', marginBottom: '8px' }} />
                     <div style={{ width: '140px', height: '12px', background: '#0a0a0a', animation: 'sk 1.5s ease infinite' }} />
                 </div>
-            </AppShell>
         );
     }
 
     if (!signal) {
         return (
-            <AppShell>
                 <div style={{ padding: '32px', textAlign: 'center' }}>
                     <p style={{ fontSize: '12px', color: '#333', letterSpacing: '0.1em' }}>SIGNAL NOT FOUND</p>
                     <button
@@ -59,7 +55,6 @@ export default function Signal() {
                         ← BACK TO FEED
                     </button>
                 </div>
-            </AppShell>
         );
     }
 
@@ -72,7 +67,6 @@ export default function Signal() {
     const formData = signal.form_data;
 
     return (
-        <AppShell>
             <div style={{ flex: 1, overflowY: 'auto', padding: '24px 32px', maxWidth: '760px' }}>
 
                 {/* Back */}
@@ -352,6 +346,5 @@ export default function Signal() {
                 </a>
 
             </div>
-        </AppShell>
     );
 }

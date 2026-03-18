@@ -93,7 +93,7 @@ export default function Landing() {
   const tickerSignals = liveSignals.length > 0 ? liveSignals : FALLBACK_SIGNALS;
 
   return (
-    <div style={{ minHeight: "100vh", background: "#030303", color: "#fff", fontFamily: "'Inter', 'JetBrains Mono', sans-serif", overflow: "hidden", position: "relative" }}>
+    <div style={{ minHeight: "100vh", background: "#050505", color: "#fff", fontFamily: "'Inter', sans-serif", overflowX: "hidden", overflowY: "auto", position: "relative" }}>
 
       {/* GRID TEXTURE */}
       <div style={{ position: "fixed", inset: 0, backgroundImage: "radial-gradient(circle, #ffffff03 1px, transparent 1px)", backgroundSize: "40px 40px", pointerEvents: "none", zIndex: 0 }} />
@@ -102,8 +102,8 @@ export default function Landing() {
       <nav data-testid="landing-navbar" style={{
         position: "fixed", top: 0, left: 0, right: 0, height: "52px",
         display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "0 32px", background: "rgba(3,3,3,0.85)", backdropFilter: "blur(20px)",
-        borderBottom: "1px solid #0a0a0a", zIndex: 100,
+        padding: "0 32px", background: "rgba(5,5,5,0.92)", backdropFilter: "blur(20px)",
+        borderBottom: "1px solid #111", zIndex: 100,
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
           <span style={{ fontSize: "17px", fontWeight: 800, letterSpacing: "0.15em", color: "#fff", fontFamily: "'JetBrains Mono', monospace" }}>AFI</span>
@@ -167,7 +167,7 @@ export default function Landing() {
             <br />
             <span style={{ color: "#fff" }}>Companies</span>
             <br />
-            <span style={{ background: "linear-gradient(135deg, #0066FF 0%, #00C805 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+            <span style={{ color: "#0066FF" }}>
               Lying.
             </span>
           </h1>
@@ -459,7 +459,7 @@ export default function Landing() {
         <h2 style={{ margin: "0 0 16px", fontSize: "clamp(32px, 5vw, 56px)", fontWeight: 800, letterSpacing: "-0.04em", fontFamily: "'JetBrains Mono', monospace", position: "relative" }}>
           Stop Guessing.
           <br />
-          <span style={{ background: "linear-gradient(135deg, #0066FF 0%, #00C805 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+          <span style={{ color: "#0066FF" }}>
             Start Knowing.
           </span>
         </h2>

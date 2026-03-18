@@ -37,33 +37,32 @@ Scoring guidance:
 - Risk: Declining revenue, heavy losses with no path to profit, going concern language, excessive dilution
 - Neutral: Mixed signals or insufficient data to assess
 
-Return structured JSON only:
-{
-  "ticker": "stock ticker or UNKNOWN",
-  "company": "full company name",
-  "signal": "Positive|Neutral|Risk",
-  "confidence": 0-100,
-  "summary": "2-3 sentence plain English brief for a trader",
-  "company_overview": "one sentence",
-  "revenue_last_year": "e.g. $142M or null",
-  "net_income_loss": "e.g. -$34M or null",
-  "revenue_growth_yoy": "e.g. +47% or null",
-  "use_of_proceeds": "brief description",
-  "lock_up_days": 180,
-  "lead_underwriters": ["Goldman Sachs", "Morgan Stanley"],
-  "insider_ownership_pct": 62,
-  "top_risks": ["risk 1", "risk 2", "risk 3"],
-  "event_type": "IPO_REGISTRATION",
-  "chain_of_thought": {
-    "step1_what_happened": "S-1 registration statement filed",
-    "step2_who_is_affected": "who benefits or is harmed",
-    "step3_historical_context": "comparable IPO precedent",
-    "step4_bull_case": "why this IPO could be strong",
-    "step5_bear_case": "why this IPO could be risky",
-    "step6_final_reasoning": "your final reasoning for the signal"
-  },
-  "key_facts": ["fact 1", "fact 2", "fact 3"]
-}"""
+Return structured JSON only."""
+
+    RESPONSE_SCHEMA = {
+        "type": "OBJECT",
+        "properties": {
+            "ticker": {"type": "STRING"},
+            "company": {"type": "STRING"},
+            "signal": {"type": "STRING", "enum": ["Positive", "Neutral", "Risk"]},
+            "confidence": {"type": "INTEGER"},
+            "summary": {"type": "STRING"},
+            "event_type": {"type": "STRING"},
+            "key_facts": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "risk_factors": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "chain_of_thought": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "company_overview": {"type": "STRING"},
+            "revenue_last_year": {"type": "STRING"},
+            "net_income_loss": {"type": "STRING"},
+            "revenue_growth_yoy": {"type": "STRING"},
+            "use_of_proceeds": {"type": "STRING"},
+            "lock_up_days": {"type": "INTEGER"},
+            "lead_underwriters": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "insider_ownership_pct": {"type": "NUMBER"},
+            "top_risks": {"type": "ARRAY", "items": {"type": "STRING"}},
+        },
+        "required": ["signal", "confidence", "summary", "event_type"],
+    }
 
     def classify(self, filing: RawFiling) -> dict:
         """Classify S-1 filing with Gemini (via Emergent key fallback)."""
@@ -83,7 +82,11 @@ Return structured JSON only:
         prompt = f"{self.SYSTEM_PROMPT}\n\nAnalyze this SEC S-1 filing:\n\n{text}"
 
         try:
-            response_text = call_gemini(prompt, session_id=f"s1-{filing.accession_number}")
+            response_text = call_gemini(
+                prompt,
+                session_id=f"s1-{filing.accession_number}",
+                response_schema=self.RESPONSE_SCHEMA,
+            )
 
             if not response_text:
                 raise ValueError("Empty response from AI")
@@ -124,6 +127,7 @@ Return structured JSON only:
                 "confidence": min(100, max(0, int(result.get("confidence", 50)))),
                 "chain_of_thought": result.get("chain_of_thought"),
                 "key_facts": result.get("key_facts", []),
+                "risk_factors": result.get("risk_factors", []),
                 "form_data": form_data,
                 "event_type": event_type,
             }

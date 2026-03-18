@@ -95,9 +95,61 @@ export const AuthProvider = ({ children }) => {
     return token ? { Authorization: `Bearer ${token}` } : {};
   };
 
+  if (loading) {
+    return (
+      <div style={{
+        minHeight: '100vh',
+        background: '#050505',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}>
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: '12px',
+        }}>
+          <div style={{
+            fontSize: '15px',
+            fontWeight: 700,
+            color: '#fff',
+            letterSpacing: '0.1em',
+            fontFamily: "'JetBrains Mono', monospace",
+          }}>
+            AFI
+          </div>
+          <div style={{
+            width: '120px',
+            height: '1px',
+            background: '#0a0a0a',
+            position: 'relative',
+            overflow: 'hidden',
+          }}>
+            <div style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              height: '100%',
+              width: '40%',
+              background: '#0066FF',
+              animation: 'afi-auth-scan 1.2s ease-in-out infinite',
+            }} />
+          </div>
+          <style>{`
+            @keyframes afi-auth-scan {
+              0% { left: -40%; }
+              100% { left: 140%; }
+            }
+          `}</style>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <AuthContext.Provider value={{ user, session, loading, login, signup, logout, authHeaders }}>
-      {!loading && children}
+      {children}
     </AuthContext.Provider>
   );
 };

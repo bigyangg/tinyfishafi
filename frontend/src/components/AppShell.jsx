@@ -3,20 +3,46 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useAppData } from '../context/AppDataContext';
 import { supabase } from '../lib/supabase';
+import MarketPulse from './MarketPulse';
 import axios from 'axios';
+
+// Initialize theme from localStorage on app load
+if (typeof window !== 'undefined' && localStorage.getItem('afi_theme') === 'light') {
+  document.body.classList.add('theme-light');
+}
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 export default function AppShell({ children }) {
     const { user, authHeaders, logout } = useAuth();
+    const { backendOnline, agentStatus: contextAgentStatus, filedToday: contextFiledToday, nextPoll: contextNextPoll } = useAppData();
     const navigate = useNavigate();
 
-    // Agent status
-    const [agentStatus, setAgentStatus] = useState('not_initialized');
-    const [filedToday, setFiledToday] = useState(0);
-    const [nextPoll, setNextPoll] = useState(null);
-    const [backendOnline, setBackendOnline] = useState(true); // Optimistic UI prevents red flicker
+    // Theme toggle
+    const [isLight, setIsLight] = useState(() => {
+        return typeof window !== 'undefined' && document.body.classList.contains('theme-light');
+    });
+
+    const toggleTheme = useCallback(() => {
+        setIsLight(prev => !prev);
+    }, []);
+
+    // Sync theme state with DOM and localStorage
+    useEffect(() => {
+        if (isLight) {
+            document.body.classList.add('theme-light');
+            localStorage.setItem('afi_theme', 'light');
+        } else {
+            document.body.classList.remove('theme-light');
+            localStorage.setItem('afi_theme', 'dark');
+        }
+    }, [isLight]);
+
+    // Use context-based status (agentStatus is already a string, not an object)
+    const agentStatus = contextAgentStatus || 'stopped';
+    const filedToday = contextFiledToday || 0;
     const [countdown, setCountdown] = useState(null);
     const countdownRef = useRef(null);
 
@@ -29,40 +55,10 @@ export default function AppShell({ children }) {
     const [activeTicker, setActiveTicker] = useState(null);
     const triggerUnlockRef = useRef(null);
 
-    const checkHealth = useCallback(async () => {
-        try {
-            await axios.get(`${API}/health`);
-            setBackendOnline(true);
-        } catch {
-            setBackendOnline(false);
-        }
-    }, []);
-
-    const fetchAgentStatus = useCallback(async () => {
-        try {
-            const res = await axios.get(`${API}/edgar/status`);
-            const d = res.data;
-            setAgentStatus(d.agent_status || 'stopped');
-            setFiledToday(d.filings_processed_today || 0);
-            if (d.next_poll_seconds != null) {
-                setNextPoll(d.next_poll_seconds);
-            }
-        } catch { }
-    }, []);
-
-    // Polling
-    useEffect(() => {
-        checkHealth();
-        fetchAgentStatus();
-        const h = setInterval(checkHealth, 30000);
-        const a = setInterval(fetchAgentStatus, 20000);
-        return () => { clearInterval(h); clearInterval(a); };
-    }, [checkHealth, fetchAgentStatus]);
-
     // Countdown timer
     useEffect(() => {
-        if (nextPoll == null) return;
-        setCountdown(nextPoll);
+        if (contextNextPoll == null) return;
+        setCountdown(contextNextPoll);
         if (countdownRef.current) clearInterval(countdownRef.current);
         countdownRef.current = setInterval(() => {
             setCountdown(prev => {
@@ -71,7 +67,7 @@ export default function AppShell({ children }) {
             });
         }, 1000);
         return () => { if (countdownRef.current) clearInterval(countdownRef.current); };
-    }, [nextPoll]);
+    }, [contextNextPoll]);
 
     const handleSignOut = async () => {
         await supabase.auth.signOut();
@@ -100,7 +96,7 @@ export default function AppShell({ children }) {
         }, 120_000);
 
         try {
-            await axios.post(`${API}/trigger-all`, { ticker: clean });
+            await axios.post(`${API}/demo/trigger-all`, { ticker: clean });
         } catch (err) {
             console.error('Signal trigger failed:', err);
         } finally {
@@ -111,6 +107,7 @@ export default function AppShell({ children }) {
 
     const navItems = [
         { to: '/dashboard', label: 'FEED', icon: '◈' },
+        { to: '/graph', label: 'GRAPH', icon: '⬡' },
         { to: '/leaderboard', label: 'DIVERGENCE', icon: '⚠' },
         { to: '/watchlist', label: 'WATCHLIST', icon: '◎' },
         { to: '/runs', label: 'SWEEPS', icon: '▤' },
@@ -125,7 +122,7 @@ export default function AppShell({ children }) {
             gridTemplateRows: '36px 1fr',
             height: '100vh',
             overflow: 'hidden',
-            background: '#050505',
+            background: 'var(--bg-base)',
             fontFamily: "'JetBrains Mono', monospace",
         }}>
 
@@ -133,56 +130,81 @@ export default function AppShell({ children }) {
             <div style={{
                 gridColumn: '1 / -1',
                 gridRow: '1',
-                borderBottom: '1px solid #111',
+                borderBottom: '1px solid var(--border-default)',
                 display: 'flex',
                 alignItems: 'center',
                 padding: '0 16px',
                 gap: '0',
-                background: '#060606',
+                background: 'var(--bg-surface)',
             }}>
                 {/* Agent status */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '7px', paddingRight: '16px', borderRight: '1px solid #111' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '7px', paddingRight: '16px', borderRight: '1px solid var(--border-default)' }}>
                     <div style={{
                         width: '5px', height: '5px',
                         borderRadius: '50%',
-                        background: agentStatus === 'running' ? '#27AE60' : '#E74C3C',
+                        background: agentStatus === 'running' ? 'var(--signal-positive)' : 'var(--signal-risk)',
                         animation: agentStatus === 'running' ? 'pulse-green 3s ease-in-out infinite' : 'none',
                         flexShrink: 0,
                     }} />
-                    <span style={{ fontSize: '10px', color: agentStatus === 'running' ? '#6FCF97' : '#EB5757', letterSpacing: '0.1em', fontFamily: "'JetBrains Mono', monospace" }}>
+                    <span style={{ fontSize: '10px', color: agentStatus === 'running' ? 'var(--signal-positive)' : 'var(--signal-risk)', letterSpacing: '0.1em', fontFamily: "'JetBrains Mono', monospace" }}>
                         {agentStatus === 'running' ? 'MONITORING SEC EDGAR' : 'EDGAR AGENT OFFLINE'}
                     </span>
                 </div>
 
                 {/* Countdown */}
                 {countdown != null && countdown > 0 && (
-                    <span style={{ fontSize: '10px', color: '#555', letterSpacing: '0.06em', padding: '0 16px', borderRight: '1px solid #111', fontFamily: "'JetBrains Mono', monospace" }}>
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', letterSpacing: '0.06em', padding: '0 16px', borderRight: '1px solid var(--border-default)', fontFamily: "'JetBrains Mono', monospace" }}>
                         NEXT POLL: {countdown}s
                     </span>
                 )}
 
                 {/* Filed today */}
                 {filedToday > 0 && (
-                    <span style={{ fontSize: '10px', color: '#555', fontFamily: "'JetBrains Mono', monospace", padding: '0 16px', borderRight: '1px solid #111' }}>
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: "'JetBrains Mono', monospace", padding: '0 16px', borderRight: '1px solid var(--border-default)' }}>
                         {filedToday} FILINGS TODAY
                     </span>
                 )}
 
+                {/* Market Pulse Score */}
+                <MarketPulse />
+
                 <div style={{ flex: 1 }} />
+
+                {/* Theme toggle button */}
+                <button
+                    onClick={toggleTheme}
+                    title={isLight ? 'Switch to dark mode' : 'Switch to light mode'}
+                    style={{
+                        background: 'transparent',
+                        border: '1px solid var(--border-default)',
+                        color: 'var(--text-secondary)',
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '12px',
+                        lineHeight: 1,
+                        marginRight: '12px',
+                        transition: 'all 100ms',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--border-strong)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border-default)'; }}
+                >
+                    {isLight ? '☾' : '☀'}
+                </button>
 
                 {/* Backend ONLINE/OFFLINE badge */}
                 <div style={{
                     display: 'flex', alignItems: 'center', gap: '6px',
                     padding: '2px 10px',
-                    border: `1px solid ${backendOnline === true ? '#27AE6030' : backendOnline === false ? '#E74C3C30' : '#333'}`,
-                    background: backendOnline === true ? '#27AE6010' : backendOnline === false ? '#E74C3C10' : 'transparent',
+                    border: `1px solid ${backendOnline === true ? 'var(--signal-positive)' : backendOnline === false ? 'var(--signal-risk)' : 'var(--text-tertiary)'}33`,
+                    background: `${backendOnline === true ? 'var(--signal-positive)' : backendOnline === false ? 'var(--signal-risk)' : 'var(--text-tertiary)'}10`,
                 }}>
                     <div style={{
                         width: '4px', height: '4px',
                         borderRadius: '50%',
-                        background: backendOnline === true ? '#27AE60' : backendOnline === false ? '#E74C3C' : '#555',
+                        background: backendOnline === true ? 'var(--signal-positive)' : backendOnline === false ? 'var(--signal-risk)' : 'var(--text-tertiary)',
                     }} />
-                    <span style={{ fontSize: '9px', color: backendOnline === true ? '#27AE60' : backendOnline === false ? '#E74C3C' : '#555', letterSpacing: '0.12em', fontFamily: "'JetBrains Mono', monospace" }}>
+                    <span style={{ fontSize: '9px', color: backendOnline === true ? 'var(--signal-positive)' : backendOnline === false ? 'var(--signal-risk)' : 'var(--text-tertiary)', letterSpacing: '0.12em', fontFamily: "'JetBrains Mono', monospace" }}>
                         {backendOnline === true ? 'ONLINE' : backendOnline === false ? 'OFFLINE' : '---'}
                     </span>
                 </div>
@@ -191,17 +213,18 @@ export default function AppShell({ children }) {
             {/* ── LEFT SIDEBAR ── */}
             <div style={{
                 gridRow: '2',
-                borderRight: '1px solid #0a0a0a',
+                borderRight: '1px solid var(--border-default)',
                 display: 'flex',
                 flexDirection: 'column',
                 overflow: 'hidden',
+                background: 'var(--bg-sidebar)',
             }}>
                 {/* Logo */}
-                <div style={{ padding: '20px 16px 20px', borderBottom: '1px solid #0a0a0a' }}>
-                    <div style={{ fontSize: '15px', fontWeight: 700, color: '#fff', letterSpacing: '0.1em' }}>
+                <div style={{ padding: '20px 16px 20px', borderBottom: '1px solid var(--border-default)' }}>
+                    <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.1em' }}>
                         AFI
                     </div>
-                    <div style={{ fontSize: '8px', color: '#2a2a2a', letterSpacing: '0.18em', marginTop: '2px' }}>
+                    <div style={{ fontSize: '8px', color: 'var(--text-tertiary)', letterSpacing: '0.18em', marginTop: '2px' }}>
                         FILING INTELLIGENCE
                     </div>
                 </div>
@@ -217,12 +240,12 @@ export default function AppShell({ children }) {
                                 alignItems: 'center',
                                 gap: '10px',
                                 padding: '9px 16px',
-                                color: isActive ? '#fff' : '#2a2a2a',
+                                color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
                                 textDecoration: 'none',
                                 fontSize: '10px',
                                 letterSpacing: '0.1em',
-                                borderLeft: isActive ? '2px solid #fff' : '2px solid transparent',
-                                background: isActive ? '#0a0a0a' : 'transparent',
+                                borderLeft: isActive ? '2px solid var(--accent-blue)' : '2px solid transparent',
+                                background: isActive ? 'var(--bg-active)' : 'transparent',
                                 transition: 'color 100ms',
                             })}
                         >
@@ -233,7 +256,7 @@ export default function AppShell({ children }) {
                 </nav>
 
                 {/* ── SIGNAL TRIGGER ── */}
-                <div style={{ borderTop: '1px solid #0a0a0a', flex: 1, overflowY: 'auto' }}>
+                <div style={{ borderTop: '1px solid var(--border-default)', flex: 1, overflowY: 'auto' }}>
                     <div
                         onClick={() => setTriggerOpen(!triggerOpen)}
                         style={{
@@ -244,10 +267,10 @@ export default function AppShell({ children }) {
                             justifyContent: 'space-between',
                         }}
                     >
-                        <span style={{ fontSize: '8px', color: '#0066FF', letterSpacing: '0.14em', fontWeight: 700 }}>
+                        <span style={{ fontSize: '8px', color: 'var(--accent-blue)', letterSpacing: '0.14em', fontWeight: 700 }}>
                             SIGNAL TRIGGER
                         </span>
-                        <span style={{ fontSize: '10px', color: '#333' }}>
+                        <span style={{ fontSize: '10px', color: 'var(--text-tertiary)' }}>
                             {triggerOpen ? '−' : '+'}
                         </span>
                     </div>
@@ -259,10 +282,10 @@ export default function AppShell({ children }) {
                             {triggerRunning && activeTicker && (
                                 <div style={{
                                     padding: '5px 8px', fontSize: '9px', letterSpacing: '0.08em',
-                                    color: '#C8A84B', border: '1px solid #C8A84B22', background: '#C8A84B08',
+                                    color: 'var(--filing-10k)', border: '1px solid var(--filing-10k)22', background: 'var(--filing-10k)08',
                                     display: 'flex', alignItems: 'center', gap: '7px',
                                 }}>
-                                    <div style={{ width: '4px', height: '4px', borderRadius: '50%', background: '#C8A84B', animation: 'pulse 1.5s infinite' }} />
+                                    <div style={{ width: '4px', height: '4px', borderRadius: '50%', background: 'var(--filing-10k)', animation: 'pulse 1.5s infinite' }} />
                                     {activeTicker} RUNNING
                                 </div>
                             )}
@@ -279,9 +302,9 @@ export default function AppShell({ children }) {
                                             disabled={locked}
                                             title={locked ? 'Run in progress — wait for it to complete' : `Trigger ${t} pipeline sweep`}
                                             style={{
-                                                background: isActive ? '#C8A84B18' : '#0a0a0a',
-                                                border: `1px solid ${isActive ? '#C8A84B' : '#151515'}`,
-                                                color: isActive ? '#C8A84B' : locked ? '#1a1a1a' : '#555',
+                                                background: isActive ? 'var(--filing-10k)18' : 'var(--bg-card)',
+                                                border: `1px solid ${isActive ? 'var(--filing-10k)' : 'var(--border-default)'}`,
+                                                color: isActive ? 'var(--filing-10k)' : locked ? 'var(--text-muted)' : 'var(--text-tertiary)',
                                                 padding: '5px 0', fontSize: '9px',
                                                 cursor: locked ? 'not-allowed' : 'pointer',
                                                 letterSpacing: '0.04em', fontFamily: "'JetBrains Mono', monospace",
@@ -313,7 +336,7 @@ export default function AppShell({ children }) {
                                                 .finally(() => setTriggerSearching(false));
                                         }}
                                         style={{
-                                            background: '#080808', border: '1px solid #1a1a1a', color: '#fff',
+                                            background: 'var(--bg-surface)', border: '1px solid var(--border-default)', color: 'var(--text-primary)',
                                             padding: '5px 7px', fontSize: '9px', width: '100%',
                                             fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.04em',
                                             textTransform: 'uppercase', borderRadius: '3px', boxSizing: 'border-box',
@@ -327,12 +350,12 @@ export default function AppShell({ children }) {
                                         onBlur={() => setTimeout(() => setTriggerResults([]), 200)}
                                     />
                                     {triggerSearching && (
-                                        <span style={{ position: 'absolute', right: '7px', top: '6px', fontSize: '8px', color: '#444' }}>...</span>
+                                        <span style={{ position: 'absolute', right: '7px', top: '6px', fontSize: '8px', color: 'var(--text-tertiary)' }}>...</span>
                                     )}
                                     {triggerResults.length > 0 && (
                                         <div style={{
                                             position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20,
-                                            background: '#0a0a0a', border: '1px solid #1a1a1a', borderTop: 'none',
+                                            background: 'var(--bg-card)', border: '1px solid var(--border-default)', borderTop: 'none',
                                             borderRadius: '0 0 3px 3px', boxShadow: '0 4px 12px rgba(0,0,0,0.6)',
                                         }}>
                                             {triggerResults.slice(0, 5).map((r, i) => (
@@ -341,14 +364,14 @@ export default function AppShell({ children }) {
                                                     onClick={() => fireTrigger(r.ticker)}
                                                     style={{
                                                         padding: '5px 7px', fontSize: '8px', cursor: 'pointer',
-                                                        fontFamily: "'JetBrains Mono', monospace", color: '#666',
-                                                        borderBottom: i < Math.min(triggerResults.length, 5) - 1 ? '1px solid #111' : 'none',
+                                                        fontFamily: "'JetBrains Mono', monospace", color: 'var(--text-secondary)',
+                                                        borderBottom: i < Math.min(triggerResults.length, 5) - 1 ? '1px solid var(--border-default)' : 'none',
                                                     }}
-                                                    onMouseEnter={e => { e.currentTarget.style.background = '#111'; e.currentTarget.style.color = '#fff'; }}
-                                                    onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#666'; }}
+                                                    onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-hover)'; e.currentTarget.style.color = 'var(--text-primary)'; }}
+                                                    onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
                                                 >
-                                                    <strong style={{ color: '#aaa' }}>{r.ticker}</strong>
-                                                    <span style={{ fontFamily: 'Inter, sans-serif', fontSize: '8px', color: '#333', marginLeft: '6px' }}>{r.name}</span>
+                                                    <strong style={{ color: 'var(--text-secondary)' }}>{r.ticker}</strong>
+                                                    <span style={{ fontFamily: 'Inter, sans-serif', fontSize: '8px', color: 'var(--text-tertiary)', marginLeft: '6px' }}>{r.name}</span>
                                                 </div>
                                             ))}
                                         </div>
@@ -357,19 +380,19 @@ export default function AppShell({ children }) {
                                 <button
                                     onClick={() => triggerQuery.trim() && fireTrigger(triggerQuery.trim())}
                                     style={{
-                                        background: '#0066FF15', border: '1px solid #0066FF50', color: '#0066FF',
+                                        background: 'var(--accent-blue-bg)', border: '1px solid var(--accent-blue-border)', color: 'var(--accent-blue)',
                                         padding: '0 10px', fontSize: '9px', cursor: 'pointer',
                                         fontFamily: "'JetBrains Mono', monospace", borderRadius: '3px',
                                         transition: 'all 100ms', fontWeight: 700, letterSpacing: '0.04em'
                                     }}
-                                    onMouseEnter={e => { e.currentTarget.style.background = '#0066FF30'; }}
-                                    onMouseLeave={e => { e.currentTarget.style.background = '#0066FF15'; }}
+                                    onMouseEnter={e => { e.currentTarget.style.background = 'var(--accent-blue)'; e.currentTarget.style.color = 'white'; }}
+                                    onMouseLeave={e => { e.currentTarget.style.background = 'var(--accent-blue-bg)'; e.currentTarget.style.color = 'var(--accent-blue)'; }}
                                 >
                                     RUN
                                 </button>
                             </div>
 
-                            <div style={{ fontSize: '7px', color: '#222', letterSpacing: '0.06em', lineHeight: 1.5 }}>
+                            <div style={{ fontSize: '7px', color: 'var(--text-muted)', letterSpacing: '0.06em', lineHeight: 1.5 }}>
                                 Runs all 6 form types through the full pipeline. Results appear in the feed + Telegram.
                             </div>
                         </div>
@@ -377,13 +400,13 @@ export default function AppShell({ children }) {
                 </div>
 
                 {/* Bottom — account */}
-                <div style={{ borderTop: '1px solid #0a0a0a', padding: '12px 14px' }}>
-                    <div style={{ fontSize: '10px', color: '#2a2a2a', letterSpacing: '0.08em', marginBottom: '2px' }}>
+                <div style={{ borderTop: '1px solid var(--border-default)', padding: '12px 14px' }}>
+                    <div style={{ fontSize: '10px', color: 'var(--text-tertiary)', letterSpacing: '0.08em', marginBottom: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {user?.email?.split('@')[0] || '—'}
                     </div>
                     <div style={{
                         fontSize: '8px',
-                        color: '#1e1e1e',
+                        color: 'var(--text-muted)',
                         letterSpacing: '0.12em',
                         marginBottom: '10px',
                     }}>
@@ -395,8 +418,8 @@ export default function AppShell({ children }) {
                             width: '100%',
                             padding: '6px 0',
                             background: 'transparent',
-                            border: '1px solid #111',
-                            color: '#2a2a2a',
+                            border: '1px solid var(--border-default)',
+                            color: 'var(--text-secondary)',
                             fontSize: '9px',
                             letterSpacing: '0.1em',
                             cursor: 'pointer',
@@ -404,8 +427,8 @@ export default function AppShell({ children }) {
                             textAlign: 'center',
                             fontFamily: "'JetBrains Mono', monospace",
                         }}
-                        onMouseEnter={e => { e.currentTarget.style.borderColor = '#FF333330'; e.currentTarget.style.color = '#FF3333'; }}
-                        onMouseLeave={e => { e.currentTarget.style.borderColor = '#111'; e.currentTarget.style.color = '#2a2a2a'; }}
+                        onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--signal-risk)'; e.currentTarget.style.color = 'var(--signal-risk)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border-default)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
                     >
                         SIGN OUT
                     </button>

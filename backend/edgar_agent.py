@@ -9,6 +9,9 @@ import threading
 import time
 import json
 import re
+import asyncio
+import hashlib
+import pytz
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
@@ -26,7 +29,41 @@ EDGAR_USER_AGENT = "AFI-Bot/1.0 (afi@tinyfish.io)"
 TELEGRAM_IMPACT_THRESHOLD = int(os.environ.get("TELEGRAM_IMPACT_THRESHOLD", "40"))
 
 # All filing types to monitor
-FORMS_TO_MONITOR = ["8-K", "10-K", "10-Q", "4", "SC 13D", "S-1", "S-1/A"]
+FORMS_TO_MONITOR = [
+    "8-K", "10-K", "10-Q", "4", "SC 13D", "S-1", "S-1/A",
+    "DEF 14A", "NT 10-K", "NT 10-Q", "8-K/A", "CORRESP",
+]
+
+
+async def check_edgar_connectivity() -> dict:
+    """Called at startup and exposed via /api/health — verifies EFTS reachability."""
+    try:
+        url = (
+            "https://efts.sec.gov/LATEST/search-index"
+            "?q=%228-K%22&dateRange=custom&startdt=2024-01-01&enddt=2024-01-02"
+        )
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            start = asyncio.get_event_loop().time()
+            r = await client.get(url, headers={"User-Agent": EDGAR_USER_AGENT})
+            elapsed_ms = (asyncio.get_event_loop().time() - start) * 1000
+            return {"reachable": r.status_code == 200, "latency_ms": round(elapsed_ms, 1)}
+    except Exception as e:
+        return {"reachable": False, "error": str(e)}
+
+
+def get_poll_interval() -> int:
+    """Returns polling interval in seconds based on market hours (Eastern Time)."""
+    et = pytz.timezone("America/New_York")
+    now = datetime.now(et)
+    hour = now.hour
+    if 4 <= hour < 9:       # Pre-market: high activity
+        return 45
+    elif 9 <= hour < 16:    # Market hours
+        return 90
+    elif 16 <= hour < 20:   # After-hours earnings
+        return 60
+    else:                   # Overnight
+        return 300
 
 
 class EdgarAgent:
@@ -46,7 +83,8 @@ class EdgarAgent:
         self.tinyfish_api_key = os.environ.get("TINYFISH_API_KEY", "")
         self.use_tinyfish = os.environ.get("USE_TINYFISH", "true").lower() == "true"
         self.telegram_enabled = os.environ.get("TELEGRAM_ENABLED", "false").lower() == "true"
-        self.poll_interval = 120  # 2 minutes
+        self.poll_interval = get_poll_interval()  # dynamic, recalculated each cycle
+        self.edgar_connectivity: dict = {"reachable": None}  # populated at startup
 
         # Pipeline integration
         self._pipeline = None
@@ -119,20 +157,22 @@ class EdgarAgent:
 
     def get_status(self):
         """Return current agent status."""
+        thread_alive = self._thread is not None and self._thread.is_alive()
         next_poll = None
-        if self.running and self._poll_start_time:
+        if thread_alive and self._poll_start_time:
             elapsed = (datetime.now(timezone.utc) - self._poll_start_time).total_seconds()
             remaining = max(0, self.poll_interval - elapsed)
             next_poll = int(remaining)
 
         status = {
-            "agent_status": "running" if self.running else "stopped",
+            "agent_status": "running" if thread_alive else "stopped",
             "last_poll_time": self.last_poll_time.isoformat() if self.last_poll_time else None,
             "filings_processed_today": self.filings_processed_today,
             "next_poll_seconds": next_poll,
             "poll_interval": self.poll_interval,
             "config_version": self._config_version,
             "tier1_count": len(self._tier1_tickers),
+            "edgar_connectivity": self.edgar_connectivity,
         }
 
         if self._price_tracker:
@@ -148,6 +188,24 @@ class EdgarAgent:
         self.running = True
         self._stop_event.clear()
         self._init_pipeline()
+
+        # Run connectivity check synchronously before first poll
+        try:
+            self.edgar_connectivity = asyncio.run(check_edgar_connectivity())
+            if self.edgar_connectivity.get("reachable"):
+                logger.info(
+                    f"[AGENT] EDGAR connectivity OK "
+                    f"(latency={self.edgar_connectivity.get('latency_ms')}ms)"
+                )
+            else:
+                logger.critical(
+                    f"[AGENT] EDGAR unreachable at startup — will retry every 60s. "
+                    f"Error: {self.edgar_connectivity.get('error', 'unknown')}"
+                )
+        except Exception as e:
+            logger.critical(f"[AGENT] Startup connectivity check failed: {e}")
+            self.edgar_connectivity = {"reachable": False, "error": str(e)}
+
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._thread.start()
         logger.info("EDGAR polling agent started (interval: %ds)", self.poll_interval)
@@ -201,26 +259,65 @@ class EdgarAgent:
             return {"status": "error", "message": str(e)}
 
     def _poll_loop(self):
-        """Main polling loop — runs every 2 minutes."""
+        """Main EDGAR polling loop — runs in a background thread, never exits on error."""
+        logger.info("EDGAR polling thread started")
         while not self._stop_event.is_set():
             self._poll_start_time = datetime.now(timezone.utc)
+            # Recalculate dynamic poll interval at each cycle start
+            self.poll_interval = get_poll_interval()
             try:
                 # Load config and process promotions at START of each cycle
                 self._load_config()
                 self._load_watchlist_tickers()
-                
+
+                # Re-check connectivity if previously unreachable
+                if not self.edgar_connectivity.get("reachable"):
+                    try:
+                        self.edgar_connectivity = asyncio.run(check_edgar_connectivity())
+                        if not self.edgar_connectivity.get("reachable"):
+                            logger.critical(
+                                f"[AGENT] EDGAR unreachable — skipping poll cycle. "
+                                f"Error: {self.edgar_connectivity.get('error', 'unknown')}. "
+                                f"Retrying in 60s."
+                            )
+                            self._stop_event.wait(60)
+                            continue
+                        else:
+                            logger.info(
+                                f"[AGENT] EDGAR connectivity restored "
+                                f"(latency={self.edgar_connectivity.get('latency_ms')}ms)"
+                            )
+                    except Exception as conn_err:
+                        logger.critical(f"[AGENT] Connectivity check failed: {conn_err}")
+                        self._stop_event.wait(60)
+                        continue
+
                 try:
                     from signal_pipeline import pipeline_log
-                    pipeline_log("AGENT", f"Poll cycle started")
+                    pipeline_log("AGENT", f"Poll cycle started (interval={self.poll_interval}s)")
                 except Exception:
                     pass
-                
+
                 logger.info("--- EDGAR POLL CYCLE START ---")
                 self._poll_edgar()
                 logger.info("--- EDGAR POLL CYCLE COMPLETE ---")
             except Exception as e:
-                logger.error(f"EDGAR poll cycle failed (non-fatal): {e}")
-            self._stop_event.wait(self.poll_interval)
+                logger.error(
+                    f"EDGAR poll cycle failed: {type(e).__name__}: {e}",
+                    exc_info=True,
+                )
+                # Don't crash — wait 30s and retry
+                self._stop_event.wait(30)
+                continue
+
+            # Sleep in small chunks so stop() can interrupt cleanly
+            interval = self.poll_interval
+            elapsed = 0
+            while elapsed < interval and not self._stop_event.is_set():
+                self._stop_event.wait(1)
+                elapsed += 1
+
+        logger.info("EDGAR polling thread stopped")
 
     def _poll_edgar(self):
         """Query EDGAR for new filings across all monitored form types."""
@@ -393,7 +490,7 @@ class EdgarAgent:
         resolved_ticker = None
         if entity_id:
             resolved_ticker, resolved_name = self._resolve_ticker_from_cik(entity_id)
-            if resolved_ticker and resolved_ticker != "UNKNOWN":
+            if resolved_ticker and not resolved_ticker.startswith("UNKNOWN"):
                 if not company_name or company_name == "Unknown":
                     company_name = resolved_name
 
@@ -419,6 +516,26 @@ class EdgarAgent:
         if not filing_text:
             logger.warning(f"[EXTRACT] No text extracted for {accession_number}, using fallback")
             filing_text = f"8-K filing by {company_name}. Accession: {accession_number}."
+
+        # --- CONTENT HASH DEDUPLICATION ---
+        if filing_text and len(filing_text) > 100:
+            content_hash = hashlib.sha256(
+                filing_text[:5000].encode("utf-8", errors="replace")
+            ).hexdigest()
+            try:
+                existing = self.supabase.table("signals").select("id").eq(
+                    "content_hash", content_hash
+                ).execute()
+                if existing.data:
+                    logger.info(
+                        f"[PROCESS] Skipping duplicate filing {accession_number} "
+                        f"(content_hash match)"
+                    )
+                    return
+            except Exception as e:
+                logger.warning(f"[PROCESS] Content hash check failed (continuing): {e}")
+        else:
+            content_hash = None
 
         # --- PIPELINE INTEGRATION ---
         if self._pipeline:
@@ -447,11 +564,13 @@ class EdgarAgent:
             
             if signal:
                 # Override ticker if CIK resolution found a real one
-                if resolved_ticker and resolved_ticker != "UNKNOWN" and signal.ticker == "UNKNOWN":
+                if resolved_ticker and not resolved_ticker.startswith("UNKNOWN") and signal.ticker == "UNKNOWN":
                     signal.ticker = resolved_ticker
                 
                 # Store enriched signal
                 signal_row = self._pipeline.signal_to_db_row(signal)
+                if content_hash:
+                    signal_row["content_hash"] = content_hash
                 try:
                     result = self.supabase.table("signals").insert(signal_row).execute()
                     self.filings_processed_today += 1
@@ -560,23 +679,48 @@ class EdgarAgent:
                 logger.error(f"[TELEGRAM] Alert failed (non-fatal): {e}")
 
     def _resolve_ticker_from_cik(self, cik):
-        """Resolve ticker and company name from SEC CIK number."""
+        """3-step fallback chain for CIK -> ticker resolution.
+
+        Step 1: SEC submissions JSON tickers field.
+        Step 2: yfinance company name search.
+        Step 3: Fallback to UNKNOWN__{cik} for reconciliation — never drops a filing.
+        """
+        padded_cik = str(cik).zfill(10)
+        company_name = ""
+
+        # Step 1: SEC submissions JSON
         try:
-            padded_cik = str(cik).zfill(10)
             url = f"https://data.sec.gov/submissions/CIK{padded_cik}.json"
             with httpx.Client(timeout=10, headers={"User-Agent": EDGAR_USER_AGENT}) as client:
                 resp = client.get(url)
                 if resp.status_code == 200:
                     data = resp.json()
                     tickers = data.get("tickers", [])
-                    name = data.get("name", "Unknown")
-                    ticker = tickers[0].upper() if tickers else "UNKNOWN"
-                    if ticker != "UNKNOWN":
-                        logger.info(f"[CIK] Resolved CIK {cik} → {ticker} ({name})")
-                    return ticker, name
+                    company_name = data.get("name", "")
+                    if tickers:
+                        resolved = tickers[0].upper()
+                        logger.info(f"[CIK] Step1: CIK {cik} -> {resolved} ({company_name})")
+                        return resolved, company_name or "Unknown Company"
         except Exception as e:
-            logger.warning(f"[CIK] Resolution failed for {cik}: {e}")
-        return "UNKNOWN", "Unknown Company"
+            logger.warning(f"[CIK] Step1 failed for {cik}: {e}")
+
+        # Step 2: yfinance search by company name
+        if company_name:
+            try:
+                import yfinance as yf
+                search_results = yf.Search(company_name, max_results=1)
+                if hasattr(search_results, "quotes") and search_results.quotes:
+                    ticker_sym = search_results.quotes[0].get("symbol", "")
+                    if ticker_sym:
+                        logger.info(f"[CIK] Step2: CIK {cik} resolved via yfinance: {ticker_sym}")
+                        return ticker_sym.upper(), company_name or "Unknown Company"
+            except Exception as e:
+                logger.warning(f"[CIK] Step2 yfinance failed for {cik} ({company_name}): {e}")
+
+        # Step 3: Fallback with CIK for reconciliation — never drop a filing
+        fallback = f"UNKNOWN__{cik}"
+        logger.warning(f"[CIK] Step3: CIK {cik} ({company_name}) unresolvable — using {fallback}")
+        return fallback, company_name or "Unknown Company"
 
     def _extract_filing_text(self, filing_url, accession_number, cik):
         """Extract filing text. Fallback chain: TinyFish → SEC EFTS → Atom Scrape."""

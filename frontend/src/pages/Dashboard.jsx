@@ -4,7 +4,6 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
-import AppShell from '../components/AppShell';
 import AlertCard from '../components/AlertCard';
 import SignalDetailModal from '../components/SignalDetailModal';
 import { SignalSkeleton, StatsSkeleton, WatchlistSkeleton } from '../components/SignalSkeleton';
@@ -1038,8 +1037,7 @@ export default function Dashboard() {
   const displayedSignals = filteredSignals;
 
   return (
-    <AppShell>
-
+      <>
       {/* 5-VIEW NAVIGATION BAR */}
       <div data-testid="nav-bar" style={{
         display: 'flex', alignItems: 'center', gap: '2px',
@@ -1191,6 +1189,6 @@ export default function Dashboard() {
         )}
       </div>
       )}
-    </AppShell>
+      </>
   );
 }

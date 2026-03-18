@@ -66,11 +66,14 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         raise HTTPException(status_code=401, detail="Authentication required")
     try:
         token = credentials.credentials
-        user_response = supabase.auth.get_user(token)
+        # Supabase client is synchronous — run in thread to avoid blocking event loop
+        user_response = await asyncio.to_thread(supabase.auth.get_user, token)
         user = user_response.user
         if not user:
             raise HTTPException(status_code=401, detail="Invalid token")
         return {"user_id": user.id, "email": user.email}
+    except HTTPException:
+        raise
     except Exception as e:
         error_msg = str(e).lower()
         if "401" in error_msg or "invalid" in error_msg or "expired" in error_msg:
@@ -599,7 +602,7 @@ async def trigger_demo_signal(body: dict):
         pipeline_log("SYSTEM", f"Demo trigger failed: {e}", "error")
         return {"error": str(e)}
 
-@api_router.post("/trigger-all")
+@api_router.post("/demo/trigger-all")
 async def trigger_all_forms(body: dict):
     """Smart sweep: run ALL filing types for a ticker in one click."""
     import time
@@ -963,20 +966,220 @@ async def get_divergence_leaderboard():
         logger.error(f"Leaderboard query failed: {e}")
         return {"leaderboard": [], "total": 0, "error": str(e)}
 
+# ============ FAILED FILINGS (DEAD-LETTER QUEUE) ============
+@api_router.get("/failed-filings")
+async def get_failed_filings():
+    """Return the last 100 failed filings from the dead-letter queue."""
+    try:
+        result = await asyncio.to_thread(
+            lambda: supabase.table("failed_filings")
+            .select("*")
+            .order("created_at", desc=True)
+            .limit(100)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        logger.error(f"[FAILED_FILINGS] Fetch failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ============ HEALTH CHECK ============
 @api_router.get("/health")
 async def health_check():
+    agent_status = edgar_agent_instance.get_status() if edgar_agent_instance else {"agent_status": "not_initialized"}
+    edgar_connectivity = agent_status.pop("edgar_connectivity", {"reachable": None})
     return {
         "status": "ok",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "service": "AFI API",
         "database": "supabase",
-        "agent": edgar_agent_instance.get_status() if edgar_agent_instance else {"agent_status": "not_initialized"},
+        "agent": agent_status,
+        "edgar_connectivity": edgar_connectivity,
     }
 
 @api_router.get("/")
 async def root():
     return {"status": "ok", "service": "AFI API", "database": "supabase"}
+
+# ============ MARKET PULSE SCORE ============
+_pulse_cache = {"data": None, "ts": 0}
+
+@api_router.get("/market/pulse")
+async def get_market_pulse():
+    """Market stress index (0-100) computed from recent signals. Cached 60s."""
+    import time as _time
+    now = _time.time()
+    if _pulse_cache["data"] and (now - _pulse_cache["ts"]) < 60:
+        return _pulse_cache["data"]
+
+    try:
+        result = supabase.table("signals") \
+            .select("signal,impact_score,confidence,event_type,ticker,filed_at") \
+            .order("created_at", desc=True) \
+            .limit(50) \
+            .execute()
+
+        recent = result.data or []
+        if not recent:
+            pulse_data = {
+                "pulse": 0,
+                "label": "CALM",
+                "risk_signals": 0,
+                "positive_signals": 0,
+                "avg_impact": 0,
+                "signal_count": 0,
+            }
+            _pulse_cache["data"] = pulse_data
+            _pulse_cache["ts"] = now
+            return pulse_data
+
+        risk_count = sum(1 for s in recent if s.get("signal") == "Risk")
+        positive_count = sum(1 for s in recent if s.get("signal") == "Positive")
+        avg_impact = sum(s.get("impact_score", 50) or 50 for s in recent) / max(len(recent), 1)
+
+        # 0 = calm, 100 = extreme stress
+        stress = (risk_count / max(len(recent), 1)) * 60 + (avg_impact / 100) * 40
+
+        pulse_data = {
+            "pulse": round(stress),
+            "label": "CRITICAL" if stress > 75 else "ELEVATED" if stress > 60 else "MODERATE" if stress > 30 else "CALM",
+            "risk_signals": risk_count,
+            "positive_signals": positive_count,
+            "avg_impact": round(avg_impact),
+            "signal_count": len(recent),
+            "top_tickers": list(set(s.get("ticker", "") for s in recent[:10])),
+        }
+        _pulse_cache["data"] = pulse_data
+        _pulse_cache["ts"] = now
+        return pulse_data
+    except Exception as e:
+        logger.error(f"[PULSE] Market pulse failed: {e}")
+        return {"pulse": 0, "label": "CALM", "error": str(e)}
+
+# ============ SECTOR RIPPLE (CORRELATION ENGINE) ============
+@api_router.get("/signals/{signal_id}/ripple")
+async def get_signal_ripple(signal_id: str):
+    """Returns sector ripple targets for a signal — which companies are affected."""
+    try:
+        from intelligence.correlation_engine import get_ripple_targets
+
+        result = supabase.table("signals").select("ticker,event_type,signal,impact_score,company").eq("id", signal_id).execute()
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Signal not found")
+
+        sig = result.data[0]
+        ticker = sig.get("ticker", "")
+        event_type = sig.get("event_type", "ROUTINE_ADMIN")
+
+        targets = get_ripple_targets(ticker, event_type)
+
+        # Optionally enrich with live prices
+        try:
+            from market_data import MarketDataService
+            mds = MarketDataService()
+            for target in targets:
+                price = mds.get_price(target["ticker"])
+                if price:
+                    target["current_price"] = round(price, 2)
+        except Exception:
+            pass
+
+        return {
+            "signal_id": signal_id,
+            "source_ticker": ticker,
+            "source_event": event_type,
+            "source_signal": sig.get("signal"),
+            "ripple_count": len(targets),
+            "targets": targets,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[RIPPLE] Ripple failed for {signal_id}: {e}")
+        return {"targets": [], "error": str(e)}
+
+# ============ TINYFISH DEEP CONTEXT ============
+@api_router.get("/signals/{signal_id}/context")
+async def get_signal_context(signal_id: str):
+    """Returns TinyFish deep context for a signal (entities, figures, risk, guidance)."""
+    try:
+        from intelligence.tinyfish_context import get_cached_context, DEEP_CONTEXT_CACHE
+
+        # Get accession number for cache lookup
+        result = supabase.table("signals").select("accession_number,tinyfish_context").eq("id", signal_id).execute()
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Signal not found")
+
+        row = result.data[0]
+        accession = row.get("accession_number", "")
+
+        # Check DB first (persisted context)
+        db_context = row.get("tinyfish_context")
+        if db_context:
+            if isinstance(db_context, str):
+                try:
+                    db_context = json.loads(db_context)
+                except:
+                    pass
+            if isinstance(db_context, dict):
+                return {"status": "ready", "context": db_context}
+
+        # Check in-memory cache
+        return get_cached_context(accession)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[CONTEXT] Context fetch failed for {signal_id}: {e}")
+        return {"status": "unavailable", "error": str(e)}
+
+# ============ CORRELATION GRAPH ============
+@api_router.get("/correlations/graph")
+async def get_correlation_graph():
+    """Returns force-graph data for the GRAPH view (nodes + edges + signal overlays)."""
+    try:
+        from intelligence.correlation_engine import build_graph_data
+
+        result = supabase.table("signals") \
+            .select("id,ticker,signal,confidence,impact_score,event_type,summary,filed_at") \
+            .order("created_at", desc=True) \
+            .limit(100) \
+            .execute()
+
+        signals = result.data or []
+        graph = build_graph_data(signals)
+        return graph
+    except Exception as e:
+        logger.error(f"[GRAPH] Graph data failed: {e}")
+        return {"nodes": [], "edges": [], "sectors": [], "error": str(e)}
+
+# ============ EVENT CASCADE TIMELINE ============
+@api_router.get("/market/timeline")
+async def get_market_timeline():
+    """Returns last 48h of signals grouped into event chains by sector proximity."""
+    try:
+        from intelligence.correlation_engine import build_event_chains
+
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+        result = supabase.table("signals") \
+            .select("id,ticker,signal,confidence,impact_score,event_type,summary,filed_at,company,filing_type") \
+            .gte("filed_at", cutoff) \
+            .order("filed_at", desc=True) \
+            .limit(100) \
+            .execute()
+
+        signals = result.data or []
+        chains = build_event_chains(signals)
+
+        return {
+            "chains": chains,
+            "total_signals": len(signals),
+            "chain_count": len(chains),
+            "window_hours": 48,
+        }
+    except Exception as e:
+        logger.error(f"[TIMELINE] Timeline failed: {e}")
+        return {"chains": [], "total_signals": 0, "chain_count": 0, "error": str(e)}
 
 # ============ TELEGRAM TEST + SETUP ============
 @api_router.post("/telegram/test")
@@ -1348,23 +1551,32 @@ async def send_daily_digest():
 # ============ SEED CLEANUP ============
 async def cleanup_seed_data():
     """Remove seed signals (accession_number starting with 'seed-') from Supabase."""
-    try:
-        result = supabase.table("signals").select("id, accession_number").like(
-            "accession_number", "seed-%"
-        ).execute()
-        seed_rows = result.data or []
-        if seed_rows:
-            logger.info(f"Removing {len(seed_rows)} seed signals from database...")
-            for row in seed_rows:
+    def _do_cleanup():
+        try:
+            result = supabase.table("signals").select("id, accession_number").like(
+                "accession_number", "seed-%"
+            ).execute()
+            seed_rows = result.data or []
+            if seed_rows:
+                logger.info(f"Removing {len(seed_rows)} seed signals from database...")
+                ids = [row["id"] for row in seed_rows]
                 try:
-                    supabase.table("signals").delete().eq("id", row["id"]).execute()
+                    # Batch delete using `in` filter instead of row-by-row
+                    supabase.table("signals").delete().in_("id", ids).execute()
                 except Exception as e:
-                    logger.warning(f"Failed to delete seed signal {row['id']}: {e}")
-            logger.info("Seed data cleanup complete.")
-        else:
-            logger.info("No seed data found in signals table.")
-    except Exception as e:
-        logger.error(f"Seed cleanup error: {e}")
+                    logger.warning(f"Batch seed delete failed, trying row-by-row: {e}")
+                    for row_id in ids:
+                        try:
+                            supabase.table("signals").delete().eq("id", row_id).execute()
+                        except Exception as e2:
+                            logger.warning(f"Failed to delete seed signal {row_id}: {e2}")
+                logger.info("Seed data cleanup complete.")
+            else:
+                logger.info("No seed data found in signals table.")
+        except Exception as e:
+            logger.error(f"Seed cleanup error: {e}")
+
+    await asyncio.to_thread(_do_cleanup)
 
 
 async def run_schema_migration():
@@ -1412,20 +1624,25 @@ ALTER TABLE signals ADD COLUMN IF NOT EXISTS genome_score INTEGER;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS genome_trend TEXT;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS genome_pattern_matches JSONB;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS genome_alert BOOLEAN;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS tinyfish_context JSONB;
 """
     logger.info("[MIGRATION] Schema migration SQL ready. Run /api/migrate to see SQL.")
     logger.info("[MIGRATION] Checking table access...")
-    try:
-        result = supabase.table("signals").select("id").limit(1).execute()
-        logger.info("[MIGRATION] signals table accessible")
-    except Exception as e:
-        logger.warning(f"[MIGRATION] signals table warning: {e}")
 
-    try:
-        result = supabase.table("company_genomes").select("id").limit(1).execute()
-        logger.info("[MIGRATION] company_genomes table accessible")
-    except Exception as e:
-        logger.warning(f"[MIGRATION] company_genomes not found — run migration SQL in Supabase dashboard")
+    def _check_tables():
+        try:
+            supabase.table("signals").select("id").limit(1).execute()
+            logger.info("[MIGRATION] signals table accessible")
+        except Exception as e:
+            logger.warning(f"[MIGRATION] signals table warning: {e}")
+
+        try:
+            supabase.table("company_genomes").select("id").limit(1).execute()
+            logger.info("[MIGRATION] company_genomes table accessible")
+        except Exception as e:
+            logger.warning(f"[MIGRATION] company_genomes not found — run migration SQL in Supabase dashboard")
+
+    await asyncio.to_thread(_check_tables)
 
 async def run_genome_backfill():
     """Run genome backfill for Tier 1 companies in background."""
@@ -1434,6 +1651,72 @@ async def run_genome_backfill():
         await backfill_genomes(supabase)
     except Exception as e:
         logger.error(f"[GENOME] Backfill error: {e}")
+
+
+async def retry_failed_filings():
+    """Retry failed filings with exponential backoff, runs every 10 minutes."""
+    while True:
+        await asyncio.sleep(600)  # 10 minutes
+        try:
+            result = await asyncio.to_thread(
+                lambda: supabase.table("failed_filings")
+                .select("*")
+                .eq("resolved", False)
+                .lt("retry_count", 3)
+                .lte("next_retry_at", datetime.utcnow().isoformat())
+                .execute()
+            )
+            for filing in (result.data or []):
+                logger.info(
+                    f"[RETRY] Retrying failed filing: {filing['accession_number']} "
+                    f"(attempt {filing['retry_count'] + 1})"
+                )
+                try:
+                    from signal_pipeline import SignalPipeline, RawFiling
+                    raw = RawFiling(
+                        accession_number=filing["accession_number"],
+                        filing_type=filing.get("form_type") or "8-K",
+                        company_name=filing.get("company") or "Unknown",
+                        entity_id=filing.get("cik") or "",
+                        filed_at=filing.get("filed_at") or datetime.utcnow().isoformat(),
+                        filing_url="",
+                        filing_text=None,
+                    )
+                    pipe = SignalPipeline(supabase)
+                    signal = await asyncio.to_thread(pipe.process, raw)
+                    if signal:
+                        row = pipe.signal_to_db_row(signal)
+                        await asyncio.to_thread(supabase.table("signals").insert(row).execute)
+                    # Mark resolved regardless of whether we got a signal
+                    await asyncio.to_thread(
+                        lambda fid=filing["id"]: supabase.table("failed_filings")
+                        .update({"resolved": True})
+                        .eq("id", fid)
+                        .execute()
+                    )
+                    logger.info(f"[RETRY] Resolved {filing['accession_number']}")
+                except Exception as retry_err:
+                    new_retry_count = filing["retry_count"] + 1
+                    backoff_minutes = 2 ** new_retry_count
+                    next_retry = (datetime.utcnow() + timedelta(minutes=backoff_minutes)).isoformat()
+                    await asyncio.to_thread(
+                        lambda fid=filing["id"], rc=new_retry_count, nr=next_retry, em=str(retry_err)[:500]: (
+                            supabase.table("failed_filings")
+                            .update({
+                                "retry_count": rc,
+                                "next_retry_at": nr,
+                                "error_message": em,
+                            })
+                            .eq("id", fid)
+                            .execute()
+                        )
+                    )
+                    logger.warning(
+                        f"[RETRY] Filing {filing['accession_number']} still failing "
+                        f"(attempt {new_retry_count}): {retry_err}"
+                    )
+        except Exception as e:
+            logger.error(f"[RETRY] Failed filings retry loop error: {e}")
 
 
 # ============ APP SETUP ============
@@ -1471,12 +1754,25 @@ async def startup_event():
 
     # Step 2: Auto-start EDGAR agent (pipeline + price tracker init inside)
     try:
-        from edgar_agent import EdgarAgent
+        from edgar_agent import EdgarAgent, check_edgar_connectivity
         edgar_agent_instance = EdgarAgent(supabase)
         edgar_agent_instance.start()
-        logger.info("EDGAR agent auto-started on server boot (pipeline + price tracker)")
+        logger.info("EDGAR agent started successfully")
     except Exception as e:
-        logger.error(f"Failed to auto-start EDGAR agent: {e}")
+        logger.error(f"EDGAR agent startup failed: {type(e).__name__}: {e}", exc_info=True)
+
+    # Step 2b: Confirm EDGAR EFTS is reachable (warning only — agent still runs)
+    try:
+        connectivity = await check_edgar_connectivity()
+        if connectivity.get('reachable'):
+            logger.info(f"EDGAR EFTS reachable: latency {connectivity.get('latency_ms', '?')}ms")
+        else:
+            logger.warning(
+                f"EDGAR EFTS connectivity check failed: {connectivity.get('error', 'unknown')}. "
+                f"Agent will retry on first poll."
+            )
+    except Exception as e:
+        logger.warning(f"EDGAR connectivity check error: {e}")
 
     # Step 3: Run Supabase schema migration for v3 enrichment columns
     try:
@@ -1495,6 +1791,12 @@ async def startup_event():
         logger.info("Telegram command polling started")
     except Exception as e:
         logger.warning(f"Failed to start Telegram polling: {e}")
+
+    # Step 6: Start failed-filings retry loop (10-minute interval, exponential backoff)
+    asyncio.create_task(retry_failed_filings())
+    logger.info("Failed filings retry task started")
+
+    logger.info("=== AFI SERVER READY — all systems initialized ===")
 
 @app.on_event("shutdown")
 async def shutdown_event():

@@ -31,14 +31,14 @@ export default function BriefView({ authHeaders }) {
   return (
     <div data-testid="brief-view" style={{ padding: '40px 32px', maxWidth: '680px', margin: '0 auto' }}>
       <div style={{
-        fontSize: '10px', color: '#333', letterSpacing: '0.12em', fontWeight: 600,
+        fontSize: '10px', color: 'var(--text-tertiary)', letterSpacing: '0.12em', fontWeight: 600,
         fontFamily: "'JetBrains Mono', monospace", marginBottom: '24px',
       }}>
         DAILY BRIEF
       </div>
 
       <h2 style={{
-        fontSize: '20px', fontWeight: 300, color: '#aaa', margin: '0 0 32px',
+        fontSize: '20px', fontWeight: 300, color: 'var(--text-secondary)', margin: '0 0 32px',
         lineHeight: 1.5,
       }}>
         {greeting}. {signalCount > 0
@@ -50,23 +50,23 @@ export default function BriefView({ authHeaders }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           {[100, 85, 65].map((w, i) => (
             <div key={i} style={{
-              height: '10px', width: `${w}%`, background: '#111',
+              height: '10px', width: `${w}%`, background: 'var(--border-default)',
               animation: `shimmer 1.5s ${i * 0.15}s ease infinite`,
             }} />
           ))}
         </div>
       ) : brief ? (
         <div style={{
-          background: '#080808', border: '1px solid #141414',
+          background: 'var(--bg-card)', border: '1px solid var(--border-default)',
           padding: '24px', position: 'relative',
         }}>
-          <div style={{ position: 'absolute', top: 0, left: 0, width: '3px', height: '100%', background: '#0066FF' }} />
+          <div style={{ position: 'absolute', top: 0, left: 0, width: '3px', height: '100%', background: 'var(--accent-blue)' }} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', paddingLeft: '12px' }}>
             {brief.split(/(?<=[.!?])\s+/).slice(0, 4).map((sentence, i) => (
               <p key={i} style={{
                 margin: 0,
                 fontSize: i === 0 ? '14px' : '12px',
-                color: i === 0 ? '#ddd' : '#666',
+                color: i === 0 ? 'var(--text-primary)' : 'var(--text-secondary)',
                 lineHeight: 1.7,
                 fontFamily: "'JetBrains Mono', monospace",
               }}>
@@ -76,27 +76,27 @@ export default function BriefView({ authHeaders }) {
           </div>
         </div>
       ) : (
-        <p style={{ fontSize: '12px', color: '#333' }}>No intelligence available yet. The EDGAR agent is monitoring for new filings.</p>
+        <p style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>No intelligence available yet. The EDGAR agent is monitoring for new filings.</p>
       )}
 
       <div style={{
         marginTop: '40px', padding: '16px',
-        background: '#060606', border: '1px solid #111',
+        background: 'var(--bg-card)', border: '1px solid var(--border-default)',
       }}>
-        <div style={{ fontSize: '9px', color: '#333', letterSpacing: '0.1em', marginBottom: '12px' }}>
+        <div style={{ fontSize: '9px', color: 'var(--text-tertiary)', letterSpacing: '0.1em', marginBottom: '12px' }}>
           MARKET STATUS
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
           {[
-            { label: 'EDGAR', status: 'MONITORING', color: '#00C805' },
-            { label: 'AGENTS', status: '7 READY', color: '#0066FF' },
-            { label: 'PIPELINE', status: 'ACTIVE', color: '#00C805' },
+            { label: 'EDGAR', status: 'MONITORING', color: 'var(--signal-positive)' },
+            { label: 'AGENTS', status: '7 READY', color: 'var(--accent-blue)' },
+            { label: 'PIPELINE', status: 'ACTIVE', color: 'var(--signal-positive)' },
           ].map(({ label, status, color }) => (
             <div key={label} style={{ textAlign: 'center' }}>
               <div style={{ fontSize: '11px', fontWeight: 600, color, fontFamily: "'JetBrains Mono', monospace" }}>
                 {status}
               </div>
-              <div style={{ fontSize: '8px', color: '#333', letterSpacing: '0.08em', marginTop: '4px' }}>{label}</div>
+              <div style={{ fontSize: '8px', color: 'var(--text-tertiary)', letterSpacing: '0.08em', marginTop: '4px' }}>{label}</div>
             </div>
           ))}
         </div>

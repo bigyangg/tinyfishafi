@@ -2,15 +2,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import AppShell from '../components/AppShell';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 const SEVERITY_COLORS = {
-  CRITICAL: { text: '#FF3333', bg: '#FF333312', border: '#FF333330' },
-  HIGH:     { text: '#F59E0B', bg: '#F59E0B10', border: '#F59E0B30' },
-  MODERATE: { text: '#FFB300', bg: '#FFB30010', border: '#FFB30020' },
-  LOW:      { text: '#666',    bg: '#66666610', border: '#66666620' },
+  CRITICAL: { text: 'var(--signal-risk)', bg: 'var(--signal-risk-bg)', border: 'var(--signal-risk)' },
+  HIGH:     { text: 'var(--filing-10k)', bg: 'rgba(251, 191, 36, 0.08)', border: 'rgba(251, 191, 36, 0.25)' },
+  MODERATE: { text: 'var(--filing-sc13d)', bg: 'rgba(251, 146, 60, 0.08)', border: 'rgba(251, 146, 60, 0.25)' },
+  LOW:      { text: 'var(--text-tertiary)',    bg: 'var(--bg-card)', border: 'var(--border-default)' },
 };
 
 function getSeverity(score) {
@@ -45,40 +44,39 @@ export default function Leaderboard() {
   }, [fetchData]);
 
   return (
-    <AppShell>
       <div style={{
         flex: 1, display: 'flex', flexDirection: 'column',
-        overflow: 'hidden', background: '#050505',
+        overflow: 'hidden', background: 'var(--bg-base)',
       }}>
         {/* HEADER */}
         <div style={{
-          flexShrink: 0, background: '#080808',
-          borderBottom: '1px solid #1a1a1a',
+          flexShrink: 0, background: 'var(--bg-surface)',
+          borderBottom: '1px solid var(--border-default)',
           padding: '14px 20px',
           display: 'flex', alignItems: 'center', gap: '12px',
         }}>
           <span style={{
-            fontSize: '15px', fontWeight: 700, color: '#fff',
+            fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)',
             letterSpacing: '0.04em',
           }}>Divergence Leaderboard</span>
           <span style={{
-            fontSize: '11px', color: '#444',
+            fontSize: '11px', color: 'var(--text-muted)',
           }}>{data.length} companies</span>
           <div style={{ flex: 1 }} />
           {lastRefresh && (
-            <span style={{ fontSize: '9px', color: '#333', fontFamily: "'JetBrains Mono', monospace" }}>
+            <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontFamily: "'JetBrains Mono', monospace" }}>
               Refreshes every 60s
             </span>
           )}
           <div style={{
             display: 'flex', alignItems: 'center', gap: '6px',
             padding: '4px 10px',
-            background: '#FF333310',
-            border: '1px solid #FF333320',
+            background: 'var(--signal-risk-bg)',
+            border: '1px solid var(--signal-risk)',
             borderRadius: '4px',
           }}>
-            <div style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#FF3333', animation: 'pulse-green 2s ease-in-out infinite' }} />
-            <span style={{ fontSize: '9px', color: '#FF3333', letterSpacing: '0.06em', fontWeight: 600 }}>LIVE</span>
+            <div style={{ width: '5px', height: '5px', borderRadius: '50%', background: 'var(--signal-risk)', animation: 'pulse-green 2s ease-in-out infinite' }} />
+            <span style={{ fontSize: '9px', color: 'var(--signal-risk)', letterSpacing: '0.06em', fontWeight: 600 }}>LIVE</span>
           </div>
         </div>
 
@@ -88,9 +86,9 @@ export default function Leaderboard() {
           gridTemplateColumns: '50px 80px 1fr 90px 100px 1fr',
           gap: '8px',
           padding: '10px 20px',
-          borderBottom: '1px solid #141414',
-          background: '#070707',
-          fontSize: '9px', color: '#444',
+          borderBottom: '1px solid var(--border-default)',
+          background: 'var(--bg-surface)',
+          fontSize: '9px', color: 'var(--text-muted)',
           letterSpacing: '0.1em', fontWeight: 600,
           fontFamily: "'JetBrains Mono', monospace",
         }}>
@@ -108,8 +106,8 @@ export default function Leaderboard() {
             <div style={{ padding: '40px', textAlign: 'center' }}>
               {[1,2,3,4,5].map(i => (
                 <div key={i} style={{
-                  height: '56px', background: '#0a0a0a', margin: '4px 20px',
-                  border: '1px solid #141414', borderRadius: '4px',
+                  height: '56px', background: 'var(--bg-card)', margin: '4px 20px',
+                  border: '1px solid var(--border-default)', borderRadius: '4px',
                   animation: 'shimmer 1.5s ease infinite',
                 }} />
               ))}
@@ -119,14 +117,14 @@ export default function Leaderboard() {
           {!loading && data.length === 0 && (
             <div style={{ padding: '60px 20px', textAlign: 'center' }}>
               <div style={{ fontSize: '40px', marginBottom: '16px', opacity: 0.3 }}>⚖</div>
-              <p style={{ fontSize: '13px', color: '#666', marginBottom: '8px' }}>
+              <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
                 No divergence signals detected yet
               </p>
-              <p style={{ fontSize: '11px', color: '#333', marginBottom: '16px' }}>
+              <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '16px' }}>
                 Divergence is detected when a company's public statements contradict their SEC filings.
               </p>
-              <p style={{ fontSize: '10px', color: '#222' }}>
-                Use the <span style={{ color: '#0066FF' }}>Signal Trigger</span> in the sidebar to analyze a company.
+              <p style={{ fontSize: '10px', color: 'var(--text-tertiary)' }}>
+                Use the <span style={{ color: 'var(--accent-blue)' }}>Signal Trigger</span> in the sidebar to analyze a company.
               </p>
             </div>
           )}
@@ -146,8 +144,8 @@ export default function Leaderboard() {
                   gridTemplateColumns: '50px 80px 1fr 90px 100px 1fr',
                   gap: '8px',
                   padding: '14px 20px',
-                  borderBottom: '1px solid #0e0e0e',
-                  background: isCritical ? '#FF333308' : '#050505',
+                  borderBottom: '1px solid var(--border-default)',
+                  background: isCritical ? 'var(--signal-risk-bg)' : 'var(--bg-base)',
                   cursor: 'pointer',
                   transition: 'background 80ms',
                 }}
@@ -266,6 +264,5 @@ export default function Leaderboard() {
           })}
         </div>
       </div>
-    </AppShell>
   );
 }

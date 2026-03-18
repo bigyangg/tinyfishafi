@@ -6,12 +6,44 @@
 import logging
 import os
 import json
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+async def call_gemini_with_retry(generate_fn, max_retries: int = 3):
+    """Wrapper for Gemini API calls with exponential backoff on rate limits.
+
+    Args:
+        generate_fn: A callable (typically a lambda wrapping model.generate_content)
+                     that will be run in a thread via asyncio.to_thread.
+        max_retries: Maximum number of retry attempts before raising.
+
+    Returns:
+        The result of generate_fn on success.
+
+    Raises:
+        Exception: If all retries are exhausted.
+    """
+    for attempt in range(max_retries):
+        try:
+            result = await asyncio.to_thread(generate_fn)
+            return result
+        except Exception as e:
+            err_str = str(e).lower()
+            if "429" in str(e) or "quota" in err_str or "rate" in err_str:
+                wait = 2 ** attempt
+                logger.warning(f"Gemini rate limited (attempt {attempt+1}/{max_retries}), waiting {wait}s")
+                await asyncio.sleep(wait)
+            elif attempt == max_retries - 1:
+                raise
+            else:
+                await asyncio.sleep(1)
+    raise Exception(f"Gemini API failed after {max_retries} retries")
 
 JUNK_PATTERNS = [
     "no matching ticker",
@@ -116,6 +148,10 @@ class ProcessedSignal:
     extraction_source: Optional[str] = None
     extraction_time_ms: Optional[int] = None
     run_id: Optional[str] = None
+    content_hash: Optional[str] = None
+    # Short interest enrichment
+    short_percent_float: Optional[float] = None
+    days_to_cover: Optional[float] = None
 
 
 class FilingProcessor(ABC):
@@ -199,7 +235,20 @@ class SignalPipeline:
             self.register_processor("S-1/A", FormS1Processor())
         except Exception as e:
             logger.error(f"[PIPELINE] Failed to register S-1 processor: {e}")
-    
+
+        try:
+            from processors.form_nt import FormNTProcessor
+            self.register_processor("NT 10-K", FormNTProcessor())
+            self.register_processor("NT 10-Q", FormNTProcessor())
+        except Exception as e:
+            logger.error(f"[PIPELINE] Failed to register NT processor: {e}")
+
+        try:
+            from processors.form_8k import Form8KProcessor
+            self.register_processor("8-K/A", Form8KProcessor())
+        except Exception as e:
+            logger.error(f"[PIPELINE] Failed to register 8-K/A processor: {e}")
+
     def register_processor(self, filing_type: str, processor: FilingProcessor):
         """Register a filing processor for a specific filing type."""
         self._processors[filing_type] = processor
@@ -219,21 +268,54 @@ class SignalPipeline:
     def process(self, filing: RawFiling, watchlist_tickers: list[str] = None, run_id: str = None) -> Optional[ProcessedSignal]:
         """
         Full pipeline: Classify -> Enrich -> Govern -> Score -> Store -> Alert.
-        
+
         Returns ProcessedSignal on success, None on failure.
+        Unhandled exceptions are recorded in the failed_filings dead-letter table.
         """
         import time
         pipeline_start = time.time()
         filing_type = filing.filing_type
-        
+        # Mutable list so _process_inner can update the stage visible to this scope
+        stage_ref = ["init"]
+
+        try:
+            return self._process_inner(filing, watchlist_tickers, run_id, pipeline_start, filing_type, stage_ref)
+        except Exception as e:
+            logger.error(
+                f"[PIPELINE] Unhandled failure for {filing.accession_number} "
+                f"(stage={stage_ref[0]}, ticker=unknown, type={filing_type}): "
+                f"{type(e).__name__}: {e}",
+                exc_info=True,
+            )
+            try:
+                self._supabase.table("failed_filings").upsert({
+                    "accession_number": filing.accession_number,
+                    "form_type": filing_type,
+                    "company": filing.company_name,
+                    "cik": filing.entity_id,
+                    "filed_at": filing.filed_at,
+                    "error_stage": stage_ref[0],
+                    "error_message": f"{type(e).__name__}: {str(e)[:500]}",
+                }).execute()
+            except Exception as insert_err:
+                logger.error(f"[PIPELINE] Failed to insert into failed_filings: {insert_err}")
+            return None
+
+    def _process_inner(self, filing: RawFiling, watchlist_tickers, run_id, pipeline_start, filing_type, stage_ref) -> Optional[ProcessedSignal]:
+        """Inner pipeline body. stage_ref[0] is updated at each step so the outer wrapper
+        can record which stage an unhandled exception occurred in."""
+        import time
+
         # Step 1: Get the right processor
+        stage_ref[0] = "processor_lookup"
         processor = self._processors.get(filing_type)
         if not processor:
             logger.warning(f"[PIPELINE] No processor for filing type: {filing_type}")
             pipeline_log("PIPELINE", f"No processor for filing type: {filing_type}", "warning")
             return None
-        
+
         # Step 2: Classify
+        stage_ref[0] = "classification"
         pipeline_log("GEMINI", f"Classifying {filing_type} filing...")
         logger.info(f"[PIPELINE] Classifying {filing_type} filing {filing.accession_number}")
         try:
@@ -282,6 +364,7 @@ class SignalPipeline:
         form_data = classification.get("form_data")
         
         # Step 3: Event classification (deterministic taxonomy)
+        stage_ref[0] = "event_classification"
         try:
             from event_classifier import classify_event
             event = classify_event(
@@ -307,19 +390,23 @@ class SignalPipeline:
         adjusted_confidence = max(0, min(100, classification["confidence"] + event.confidence_adjustment))
         
         # Step 4: Market data enrichment
+        stage_ref[0] = "market_data"
         ticker = classification["ticker"]
         price_at_filing = None
         news_headlines = []
-        
+        short_interest_data = {}
+
         try:
             mds = self.get_market_data()
             price_at_filing = mds.get_price(ticker)
             news_items = mds.get_news_headlines(ticker, limit=5)
             news_headlines = [item.title for item in news_items]
+            short_interest_data = mds.get_short_interest(ticker)
         except Exception as e:
             logger.warning(f"[PIPELINE] Market data enrichment failed (continuing): {e}")
         
         # Step 5: Sentiment analysis
+        stage_ref[0] = "sentiment"
         pipeline_log("NEWS", f"Analyzing sentiment for {ticker}...")
         sentiment_delta = None
         news_sentiment_score = None
@@ -349,6 +436,7 @@ class SignalPipeline:
             pipeline_log("NEWS", f"Sentiment analysis failed: {e}", "warning")
         
         # Step 6: Governance checks
+        stage_ref[0] = "governance"
         pipeline_log("GOVERNANCE", "Running 5 checks...")
         governance_audit = []
         divergence_type = None
@@ -385,6 +473,7 @@ class SignalPipeline:
             pipeline_log("GOVERNANCE", f"Governance failed: {e}", "warning")
         
         # Step 7: Impact scoring
+        stage_ref[0] = "impact_scoring"
         impact_score = None
         impact_breakdown = None
         try:
@@ -426,6 +515,7 @@ class SignalPipeline:
             pipeline_log("SCORING", f"Scoring failed: {e}", "warning")
         
         # Build final signal
+        stage_ref[0] = "build_signal"
         total_time = round(time.time() - pipeline_start, 1)
         
         signal = ProcessedSignal(
@@ -455,6 +545,8 @@ class SignalPipeline:
             news_sentiment=news_sentiment_label,
             divergence_type=divergence_type,
             run_id=run_id,
+            short_percent_float=short_interest_data.get('short_percent_float') if short_interest_data else None,
+            days_to_cover=short_interest_data.get('short_ratio') if short_interest_data else None,
         )
         
         pipeline_log("STORE", f"Signal saved to Supabase", "success", run_id=run_id)
@@ -518,4 +610,10 @@ class SignalPipeline:
             row["form_data"] = json.dumps(signal.form_data)
         if signal.run_id is not None:
             row["run_id"] = signal.run_id
+        if signal.content_hash is not None:
+            row["content_hash"] = signal.content_hash
+        if signal.short_percent_float is not None:
+            row["short_percent_float"] = signal.short_percent_float
+        if signal.days_to_cover is not None:
+            row["days_to_cover"] = signal.days_to_cover
         return row

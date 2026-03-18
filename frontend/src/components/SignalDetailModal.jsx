@@ -3,17 +3,18 @@
 // Fetches price correlation inline. Closes on Escape.
 
 import { useState, useEffect, useCallback } from 'react';
+import TinyFishContext from './TinyFishContext';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8001';
 
 function SignalBadge({ signal }) {
     const colors = {
-        Positive: "#00C805",
-        Risk: "#FF3333",
-        Neutral: "#525252",
-        Pending: "#333",
+        Positive: "var(--signal-positive)",
+        Risk: "var(--signal-risk)",
+        Neutral: "var(--text-secondary)",
+        Pending: "var(--text-muted)",
     };
-    const c = colors[signal] || "#525252";
+    const c = colors[signal] || "var(--text-secondary)";
     if (signal === "Neutral" || signal === "Pending") return null;
     return (
         <span style={{
@@ -22,7 +23,7 @@ function SignalBadge({ signal }) {
             background: `${c}18`,
             border: `1px solid ${c}44`,
             color: c,
-            fontFamily: "'IBM Plex Mono', monospace",
+            fontFamily: "'JetBrains Mono', monospace",
             letterSpacing: "0.06em",
         }}>
             {signal?.toUpperCase()}
@@ -33,7 +34,7 @@ function SignalBadge({ signal }) {
 function SectionHeader({ label }) {
     return (
         <div style={{
-            fontSize: "10px", color: "#333",
+            fontSize: "10px", color: "var(--text-muted)",
             fontFamily: "'JetBrains Mono', monospace",
             letterSpacing: "0.1em", fontWeight: 600,
             marginBottom: "10px", marginTop: "4px",
@@ -45,9 +46,9 @@ function DataRow({ label, value, color }) {
     if (value === null || value === undefined) return null;
     return (
         <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0" }}>
-            <span style={{ fontSize: "11px", color: "#444" }}>{label}</span>
+            <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>{label}</span>
             <span style={{
-                fontSize: "12px", color: color || "#888",
+                fontSize: "12px", color: color || "var(--text-secondary)",
                 fontFamily: "'JetBrains Mono', monospace", fontWeight: 600,
             }}>{value}</span>
         </div>
@@ -129,8 +130,8 @@ export default function SignalDetailModal({ signal, onClose }) {
                     transform: "translate(-50%, -50%)",
                     width: "min(620px, 92vw)",
                     maxHeight: "85vh",
-                    background: "#080808",
-                    border: "1px solid #1a1a1a",
+                    background: "var(--bg-surface)",
+                    border: "1px solid var(--border-default)",
                     zIndex: 101,
                     overflow: "auto",
                     animation: "slideDown 150ms ease",
@@ -141,7 +142,7 @@ export default function SignalDetailModal({ signal, onClose }) {
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "20px" }}>
                     <div>
                         <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "4px" }}>
-                            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: "18px", color: "#fff" }}>
+                            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: "18px", color: "var(--text-primary)" }}>
                                 {signal.ticker}
                             </span>
                             <SignalBadge signal={signal.classification} />
@@ -149,30 +150,30 @@ export default function SignalDetailModal({ signal, onClose }) {
                                 <span style={{
                                     fontSize: "10px",
                                     padding: "2px 6px",
-                                    background: "#0066FF12",
-                                    border: "1px solid #0066FF30",
-                                    color: "#0066FF",
+                                    background: "var(--accent-blue-bg)",
+                                    border: "1px solid var(--accent-blue-border)",
+                                    color: "var(--accent-blue)",
                                     fontFamily: "'IBM Plex Mono', monospace",
                                 }}>
                                     {signal.event_type.replace(/_/g, " ")}
                                 </span>
                             )}
                         </div>
-                        <p style={{ margin: 0, fontSize: "13px", color: "#444", fontFamily: "'IBM Plex Mono', monospace" }}>
+                        <p style={{ margin: 0, fontSize: "13px", color: "var(--text-secondary)", fontFamily: "'IBM Plex Mono', monospace" }}>
                             {signal.company_name}
                         </p>
                     </div>
                     <button
                         onClick={onClose}
                         data-testid="signal-modal-close"
-                        style={{ background: "none", border: "none", color: "#333", cursor: "pointer", fontSize: "18px", padding: "0 4px" }}
+                        style={{ background: "none", border: "none", color: "var(--text-tertiary)", cursor: "pointer", fontSize: "18px", padding: "0 4px" }}
                     >
                         ✕
                     </button>
                 </div>
 
                 {/* Summary */}
-                <p style={{ fontSize: "14px", color: "#888", lineHeight: 1.6, marginBottom: "20px" }}>
+                <p style={{ fontSize: "14px", color: "var(--text-secondary)", lineHeight: 1.6, marginBottom: "20px" }}>
                     {signal.summary}
                 </p>
 
@@ -185,8 +186,8 @@ export default function SignalDetailModal({ signal, onClose }) {
                         { label: "EVENT TYPE", value: signal.event_type?.replace(/_/g, " ") || "—" },
                     ].map(({ label, value }) => (
                         <div key={label}>
-                            <div style={{ fontSize: "10px", color: "#333", fontFamily: "'JetBrains Mono', monospace", marginBottom: "3px", letterSpacing: "0.08em" }}>{label}</div>
-                            <div style={{ fontSize: "13px", color: "#888", fontFamily: "'JetBrains Mono', monospace" }}>{value}</div>
+                            <div style={{ fontSize: "10px", color: "var(--text-tertiary)", fontFamily: "'JetBrains Mono', monospace", marginBottom: "3px", letterSpacing: "0.08em" }}>{label}</div>
+                            <div style={{ fontSize: "13px", color: "var(--text-secondary)", fontFamily: "'JetBrains Mono', monospace" }}>{value}</div>
                         </div>
                     ))}
                 </div>
@@ -194,46 +195,46 @@ export default function SignalDetailModal({ signal, onClose }) {
                 {/* ═══ DIVERGENCE SECTION ═══ */}
                 {hasDivergence && (
                     <div style={{
-                        borderTop: "1px solid #111", paddingTop: "16px", marginBottom: "16px",
+                        borderTop: "1px solid var(--border-default)", paddingTop: "16px", marginBottom: "16px",
                     }}>
                         <SectionHeader label="DIVERGENCE DETECTION" />
                         <div style={{
-                            background: isCriticalDiv ? '#FF333308' : '#F59E0B08',
-                            border: `1px solid ${isCriticalDiv ? '#FF333325' : '#F59E0B25'}`,
-                            borderLeft: `3px solid ${isCriticalDiv ? '#FF3333' : '#F59E0B'}`,
+                            background: isCriticalDiv ? 'var(--signal-risk-bg)' : 'rgba(251, 191, 36, 0.08)',
+                            border: `1px solid ${isCriticalDiv ? 'var(--signal-risk)' : 'var(--filing-10k)'}25`,
+                            borderLeft: `3px solid ${isCriticalDiv ? 'var(--signal-risk)' : 'var(--filing-10k)'}`,
                             padding: '12px 14px',
                         }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
                                 <span style={{
                                     fontSize: '12px', fontWeight: 700,
-                                    color: isCriticalDiv ? '#FF3333' : '#F59E0B',
+                                    color: isCriticalDiv ? 'var(--signal-risk)' : 'var(--filing-10k)',
                                     fontFamily: "'JetBrains Mono', monospace",
                                 }}>
                                     SCORE: {divScore}/100
                                 </span>
                                 <span style={{
                                     fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em',
-                                    color: isCriticalDiv ? '#FF3333' : '#F59E0B',
-                                    background: isCriticalDiv ? '#FF333315' : '#F59E0B15',
+                                    color: isCriticalDiv ? 'var(--signal-risk)' : 'var(--filing-10k)',
+                                    background: isCriticalDiv ? 'var(--signal-risk-bg)' : 'rgba(251, 191, 36, 0.15)',
                                     padding: '2px 6px',
                                 }}>
                                     {signal.divergence_severity || (isCriticalDiv ? 'CRITICAL' : 'HIGH')}
                                 </span>
                             </div>
                             {signal.public_claim && (
-                                <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px' }}>
-                                    <span style={{ fontWeight: 600, color: '#777' }}>CEO said: </span>
+                                <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                                    <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}>CEO said: </span>
                                     <span style={{ fontStyle: 'italic' }}>"{signal.public_claim}"</span>
                                 </div>
                             )}
                             {signal.filing_reality && (
-                                <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px' }}>
-                                    <span style={{ fontWeight: 600, color: '#777' }}>Filing says: </span>
+                                <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                                    <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}>Filing says: </span>
                                     {signal.filing_reality}
                                 </div>
                             )}
                             {signal.contradiction_summary && (
-                                <div style={{ fontSize: '11px', color: '#555', marginTop: '6px' }}>
+                                <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '6px' }}>
                                     {signal.contradiction_summary}
                                 </div>
                             )}
@@ -243,24 +244,24 @@ export default function SignalDetailModal({ signal, onClose }) {
 
                 {/* ═══ GENOME ALERT ═══ */}
                 {signal.genome_alert && (
-                    <div style={{ borderTop: "1px solid #111", paddingTop: "16px", marginBottom: "16px" }}>
+                    <div style={{ borderTop: "1px solid var(--border-default)", paddingTop: "16px", marginBottom: "16px" }}>
                         <SectionHeader label="GENOME ALERT" />
                         <div style={{
-                            background: '#0066FF08', border: '1px solid #0066FF20',
-                            borderLeft: '3px solid #0066FF', padding: '10px 14px',
+                            background: 'var(--accent-blue-bg)', border: '1px solid var(--accent-blue-border)',
+                            borderLeft: '3px solid var(--accent-blue)', padding: '10px 14px',
                         }}>
                             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '6px' }}>
-                                <DataRow label="Score" value={signal.genome_score} color="#0066FF" />
+                                <DataRow label="Score" value={signal.genome_score} color="var(--accent-blue)" />
                                 <DataRow label="Trend" value={signal.genome_trend} color={
-                                    signal.genome_trend === 'DETERIORATING' ? '#FF3333' :
-                                    signal.genome_trend === 'IMPROVING' ? '#00C805' : '#888'
+                                    signal.genome_trend === 'DETERIORATING' ? 'var(--signal-risk)' :
+                                    signal.genome_trend === 'IMPROVING' ? 'var(--signal-positive)' : 'var(--text-secondary)'
                                 } />
                             </div>
                             {genomePatterns && genomePatterns.length > 0 && (
                                 <div style={{ marginTop: '6px' }}>
                                     {genomePatterns.slice(0, 3).map((p, i) => (
-                                        <div key={i} style={{ fontSize: '10px', color: '#555', marginBottom: '2px' }}>
-                                            <span style={{ color: '#666', fontWeight: 600 }}>{p.pattern}</span>
+                                        <div key={i} style={{ fontSize: '10px', color: 'var(--text-tertiary)', marginBottom: '2px' }}>
+                                            <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{p.pattern}</span>
                                             {' '}{p.count} filings — {p.similarity}% match
                                         </div>
                                     ))}
@@ -272,27 +273,27 @@ export default function SignalDetailModal({ signal, onClose }) {
 
                 {/* ═══ SOCIAL SENTIMENT ═══ */}
                 {(signal.reddit_sentiment !== null || signal.stocktwits_sentiment !== null || signal.social_vs_filing_delta) && (
-                    <div style={{ borderTop: "1px solid #111", paddingTop: "16px", marginBottom: "16px" }}>
+                    <div style={{ borderTop: "1px solid var(--border-default)", paddingTop: "16px", marginBottom: "16px" }}>
                         <SectionHeader label="SOCIAL SENTIMENT" />
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
                             <DataRow label="Reddit" value={
                                 signal.reddit_sentiment != null ? `${parseFloat(signal.reddit_sentiment).toFixed(2)}` : null
-                            } color={parseFloat(signal.reddit_sentiment) > 0 ? '#00C805' : parseFloat(signal.reddit_sentiment) < 0 ? '#FF3333' : '#888'} />
+                            } color={parseFloat(signal.reddit_sentiment) > 0 ? 'var(--signal-positive)' : parseFloat(signal.reddit_sentiment) < 0 ? 'var(--signal-risk)' : 'var(--text-secondary)'} />
                             <DataRow label="StockTwits" value={
                                 signal.stocktwits_sentiment != null ? `${parseFloat(signal.stocktwits_sentiment).toFixed(2)}` : null
-                            } color={parseFloat(signal.stocktwits_sentiment) > 0 ? '#00C805' : parseFloat(signal.stocktwits_sentiment) < 0 ? '#FF3333' : '#888'} />
+                            } color={parseFloat(signal.stocktwits_sentiment) > 0 ? 'var(--signal-positive)' : parseFloat(signal.stocktwits_sentiment) < 0 ? 'var(--signal-risk)' : 'var(--text-secondary)'} />
                         </div>
                         {signal.social_volume_spike && (
-                            <div style={{ fontSize: '10px', color: '#F59E0B', marginTop: '6px', fontFamily: "'JetBrains Mono', monospace" }}>
+                            <div style={{ fontSize: '10px', color: 'var(--filing-10k)', marginTop: '6px', fontFamily: "'JetBrains Mono', monospace" }}>
                                 ⚡ VOLUME SPIKE DETECTED
                             </div>
                         )}
                         {signal.social_vs_filing_delta && signal.social_vs_filing_delta !== 'NEUTRAL' && (
-                            <div style={{ fontSize: '10px', color: '#555', marginTop: '4px' }}>
+                            <div style={{ fontSize: '10px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
                                 Social vs Filing: <span style={{
-                                    color: signal.social_vs_filing_delta === 'ALIGNED_BULLISH' ? '#00C805' :
-                                        signal.social_vs_filing_delta === 'ALIGNED_BEARISH' ? '#FF3333' :
-                                        signal.social_vs_filing_delta === 'CONFLICTING' ? '#F59E0B' : '#555',
+                                    color: signal.social_vs_filing_delta === 'ALIGNED_BULLISH' ? 'var(--signal-positive)' :
+                                        signal.social_vs_filing_delta === 'ALIGNED_BEARISH' ? 'var(--signal-risk)' :
+                                        signal.social_vs_filing_delta === 'CONFLICTING' ? 'var(--filing-10k)' : 'var(--text-tertiary)',
                                     fontWeight: 600,
                                 }}>{signal.social_vs_filing_delta.replace(/_/g, ' ')}</span>
                             </div>
@@ -302,21 +303,21 @@ export default function SignalDetailModal({ signal, onClose }) {
 
                 {/* ═══ INSIDER ACTIVITY ═══ */}
                 {(signal.insider_net_30d != null || signal.insider_ceo_activity) && (
-                    <div style={{ borderTop: "1px solid #111", paddingTop: "16px", marginBottom: "16px" }}>
+                    <div style={{ borderTop: "1px solid var(--border-default)", paddingTop: "16px", marginBottom: "16px" }}>
                         <SectionHeader label="INSIDER ACTIVITY" />
                         <DataRow label="Net 30d" value={
                             signal.insider_net_30d != null ? `$${Math.abs(parseFloat(signal.insider_net_30d)).toLocaleString(undefined, {maximumFractionDigits: 0})}` : null
-                        } color={parseFloat(signal.insider_net_30d) > 0 ? '#00C805' : '#FF3333'} />
+                        } color={parseFloat(signal.insider_net_30d) > 0 ? 'var(--signal-positive)' : 'var(--signal-risk)'} />
                         <DataRow label="Net 90d" value={
                             signal.insider_net_90d != null ? `$${Math.abs(parseFloat(signal.insider_net_90d)).toLocaleString(undefined, {maximumFractionDigits: 0})}` : null
-                        } color={parseFloat(signal.insider_net_90d) > 0 ? '#00C805' : '#FF3333'} />
+                        } color={parseFloat(signal.insider_net_90d) > 0 ? 'var(--signal-positive)' : 'var(--signal-risk)'} />
                         {signal.insider_ceo_activity && signal.insider_ceo_activity !== 'NONE' && (
                             <DataRow label="CEO" value={signal.insider_ceo_activity} color={
-                                signal.insider_ceo_activity === 'BUYING' ? '#00C805' : '#FF3333'
+                                signal.insider_ceo_activity === 'BUYING' ? 'var(--signal-positive)' : 'var(--signal-risk)'
                             } />
                         )}
                         {signal.insider_unusual_delay && (
-                            <div style={{ fontSize: '10px', color: '#F59E0B', marginTop: '6px', fontFamily: "'JetBrains Mono', monospace" }}>
+                            <div style={{ fontSize: '10px', color: 'var(--filing-10k)', marginTop: '6px', fontFamily: "'JetBrains Mono', monospace" }}>
                                 ⚠ UNUSUAL FILING DELAY DETECTED
                             </div>
                         )}
@@ -325,18 +326,18 @@ export default function SignalDetailModal({ signal, onClose }) {
 
                 {/* ═══ CONGRESS TRADES ═══ */}
                 {(signal.congress_net_sentiment && signal.congress_net_sentiment !== 'NEUTRAL') && (
-                    <div style={{ borderTop: "1px solid #111", paddingTop: "16px", marginBottom: "16px" }}>
+                    <div style={{ borderTop: "1px solid var(--border-default)", paddingTop: "16px", marginBottom: "16px" }}>
                         <SectionHeader label="CONGRESS TRADING" />
                         <DataRow label="Net Sentiment" value={signal.congress_net_sentiment} color={
-                            signal.congress_net_sentiment === 'BUYING' ? '#00C805' : '#FF3333'
+                            signal.congress_net_sentiment === 'BUYING' ? 'var(--signal-positive)' : 'var(--signal-risk)'
                         } />
                         {signal.congress_suspicious_timing && (
-                            <div style={{ fontSize: '10px', color: '#FF3333', marginTop: '6px', fontFamily: "'JetBrains Mono', monospace" }}>
+                            <div style={{ fontSize: '10px', color: 'var(--signal-risk)', marginTop: '6px', fontFamily: "'JetBrains Mono', monospace" }}>
                                 🚨 SUSPICIOUS TIMING DETECTED
                             </div>
                         )}
                         {signal.congress_timing_note && (
-                            <div style={{ fontSize: '10px', color: '#555', marginTop: '4px' }}>
+                            <div style={{ fontSize: '10px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
                                 {signal.congress_timing_note}
                             </div>
                         )}
@@ -344,10 +345,10 @@ export default function SignalDetailModal({ signal, onClose }) {
                             <div style={{ marginTop: '8px' }}>
                                 {congressTrades.slice(0, 5).map((t, i) => (
                                     <div key={i} style={{
-                                        fontSize: '10px', color: '#555', padding: '3px 0',
-                                        borderBottom: '1px solid #0d0d0d',
+                                        fontSize: '10px', color: 'var(--text-tertiary)', padding: '3px 0',
+                                        borderBottom: '1px solid var(--border-default)',
                                     }}>
-                                        <span style={{ color: '#777', fontWeight: 600 }}>{t.member || t.name}</span>
+                                        <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{t.member || t.name}</span>
                                         {' '}({t.party || '?'}) — {t.type || t.transaction_type || '?'}
                                     </div>
                                 ))}
@@ -358,32 +359,37 @@ export default function SignalDetailModal({ signal, onClose }) {
 
                 {/* ═══ NEWS HEADLINES ═══ */}
                 {newsHeadlines && newsHeadlines.length > 0 && (
-                    <div style={{ borderTop: "1px solid #111", paddingTop: "16px", marginBottom: "16px" }}>
+                    <div style={{ borderTop: "1px solid var(--border-default)", paddingTop: "16px", marginBottom: "16px" }}>
                         <SectionHeader label="NEWS HEADLINES" />
                         {signal.news_dominant_theme && (
-                            <div style={{ fontSize: '10px', color: '#0066FF', marginBottom: '8px', fontFamily: "'JetBrains Mono', monospace" }}>
+                            <div style={{ fontSize: '10px', color: 'var(--accent-blue)', marginBottom: '8px', fontFamily: "'JetBrains Mono', monospace" }}>
                                 Theme: {signal.news_dominant_theme.replace(/_/g, ' ')}
                             </div>
                         )}
                         {newsHeadlines.slice(0, 5).map((h, i) => (
                             <div key={i} style={{
-                                padding: '6px 0', borderBottom: '1px solid #0d0d0d',
-                                fontSize: '11px', color: '#666',
+                                padding: '6px 0', borderBottom: '1px solid var(--border-default)',
+                                fontSize: '11px', color: 'var(--text-secondary)',
                             }}>
                                 {typeof h === 'string' ? h : (
                                     <>
                                         <div>{h.headline}</div>
-                                        {h.source && <span style={{ fontSize: '9px', color: '#333' }}>— {h.source}</span>}
+                                        {h.source && <span style={{ fontSize: '9px', color: 'var(--text-tertiary)' }}>— {h.source}</span>}
                                     </>
                                 )}
                             </div>
                         ))}
                     </div>
                 )}
+                {/* ═══ TINYFISH DEEP CONTEXT ═══ */}
+                <div style={{ borderTop: '1px solid var(--border-default)', paddingTop: '16px', marginBottom: '16px' }}>
+                    <SectionHeader label="DEEP CONTEXT" />
+                    <TinyFishContext signalId={signal.id} />
+                </div>
 
                 {/* Price correlation */}
                 {correlation && (
-                    <div style={{ borderTop: "1px solid #111", paddingTop: "16px" }}>
+                    <div style={{ borderTop: "1px solid var(--border-default)", paddingTop: "16px" }}>
                         <SectionHeader label="PRICE IMPACT" />
                         <div style={{ display: "flex", gap: "24px" }}>
                             {[
@@ -392,12 +398,12 @@ export default function SignalDetailModal({ signal, onClose }) {
                                 { label: "3D", value: correlation.pct_change_3d },
                             ].map(({ label, value }) => (
                                 <div key={label}>
-                                    <div style={{ fontSize: "10px", color: "#333", fontFamily: "'IBM Plex Mono', monospace", marginBottom: "4px" }}>{label}</div>
+                                    <div style={{ fontSize: "10px", color: "var(--text-tertiary)", fontFamily: "'IBM Plex Mono', monospace", marginBottom: "4px" }}>{label}</div>
                                     <div style={{
                                         fontSize: "20px",
                                         fontFamily: "'IBM Plex Mono', monospace",
                                         fontWeight: 600,
-                                        color: value == null ? "#222" : value > 0 ? "#00C805" : value < 0 ? "#FF3333" : "#555"
+                                        color: value == null ? "var(--text-muted)" : value > 0 ? "var(--signal-positive)" : value < 0 ? "var(--signal-risk)" : "var(--text-tertiary)"
                                     }}>
                                         {value == null ? "—" : `${value > 0 ? "+" : ""}${value.toFixed(2)}%`}
                                     </div>
@@ -409,21 +415,21 @@ export default function SignalDetailModal({ signal, onClose }) {
 
                 {/* Accession number */}
                 {signal.accession_number && (
-                    <div style={{ borderTop: "1px solid #0d0d0d", marginTop: "16px", paddingTop: "12px" }}>
-                        <div style={{ fontSize: "10px", color: "#222", fontFamily: "'JetBrains Mono', monospace", letterSpacing: "0.08em", marginBottom: "3px" }}>ACCESSION</div>
-                        <div style={{ fontSize: "11px", color: "#333", fontFamily: "'JetBrains Mono', monospace" }}>{signal.accession_number}</div>
+                    <div style={{ borderTop: "1px solid var(--border-default)", marginTop: "16px", paddingTop: "12px" }}>
+                        <div style={{ fontSize: "10px", color: "var(--text-muted)", fontFamily: "'JetBrains Mono', monospace", letterSpacing: "0.08em", marginBottom: "3px" }}>ACCESSION</div>
+                        <div style={{ fontSize: "11px", color: "var(--text-secondary)", fontFamily: "'JetBrains Mono', monospace" }}>{signal.accession_number}</div>
                     </div>
                 )}
 
                 {/* SEC link */}
                 {edgarLink && (
-                    <div style={{ borderTop: "1px solid #0d0d0d", marginTop: "16px", paddingTop: "16px" }}>
+                    <div style={{ borderTop: "1px solid var(--border-default)", marginTop: "16px", paddingTop: "16px" }}>
                         <a
                             href={edgarLink}
                             target="_blank"
                             rel="noopener noreferrer"
                             data-testid="signal-modal-edgar-link"
-                            style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: "11px", color: "#0066FF", textDecoration: "none", letterSpacing: "0.06em" }}
+                            style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: "11px", color: "var(--accent-blue)", textDecoration: "none", letterSpacing: "0.06em" }}
                         >
                             VIEW ON SEC EDGAR ↗
                         </a>

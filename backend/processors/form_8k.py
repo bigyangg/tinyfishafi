@@ -20,15 +20,10 @@ class Form8KProcessor(FilingProcessor):
   "summary": "one sentence plain English summary, max 25 words",
   "signal": "Positive or Neutral or Risk",
   "confidence": integer 0-100,
-  "chain_of_thought": {
-    "step1_what_happened": "brief description of the event",
-    "step2_who_is_affected": "who benefits or is harmed",
-    "step3_historical_context": "any relevant precedent",
-    "step4_bull_case": "why this could be positive",
-    "step5_bear_case": "why this could be negative",
-    "step6_final_reasoning": "your final reasoning for the signal"
-  },
-  "key_facts": ["fact 1", "fact 2", "fact 3"]
+  "chain_of_thought": ["step1: what happened", "step2: who is affected", "step3: historical context", "step4: bull case", "step5: bear case", "step6: final reasoning"],
+  "key_facts": ["fact 1", "fact 2", "fact 3"],
+  "event_type": "one of: EARNINGS_BEAT, EARNINGS_MISS, EXEC_DEPARTURE, EXEC_APPOINTMENT, DEBT_FINANCING, CONTRACT_WIN, BUYBACK, MERGER_ACQUISITION, GUIDANCE_RAISED, GUIDANCE_LOWERED, LITIGATION, RESTATEMENT, ROUTINE_ADMIN",
+  "risk_factors": ["risk 1", "risk 2"]
 }
 Classify as Risk if: executive departure, litigation, debt issues, restatement, going concern.
 Classify as Positive if: revenue beat, new contract, buyback, leadership upgrade.
@@ -36,11 +31,47 @@ Classify as Neutral for routine administrative filings.
 
 IMPORTANT classification rules:
 - Convertible note / promissory note / debt issuance → DEBT_FINANCING (Risk)
-- Strategic partnership / new client / new contract → CONTRACT_WIN (Positive)  
+- Strategic partnership / new client / new contract → CONTRACT_WIN (Positive)
 - CEO/CFO resigns → EXEC_DEPARTURE (Risk)
 - New executive hired → EXEC_APPOINTMENT (Neutral/Positive)
 - Revenue reported above expectations → EARNINGS_BEAT (Positive)
-- Revenue reported below expectations → EARNINGS_MISS (Risk)"""
+- Revenue reported below expectations → EARNINGS_MISS (Risk)
+
+Additionally, extract these financial metrics as numbers (use null if not present in the filing):
+- actual_eps: reported EPS this quarter
+- consensus_eps: analyst consensus EPS if mentioned
+- eps_surprise_pct: percentage beat/miss vs consensus (positive = beat)
+- actual_revenue_millions: reported revenue in millions
+- consensus_revenue_millions: consensus revenue if mentioned
+- revenue_surprise_pct: percentage beat/miss in %
+- guidance_direction: one of "raised", "lowered", "maintained", "withdrawn", "none"
+- guidance_magnitude_pct: how much guidance changed in % (null if not applicable)
+- next_quarter_eps_guide: guided EPS for next quarter (null if not given)"""
+
+    RESPONSE_SCHEMA = {
+        "type": "OBJECT",
+        "properties": {
+            "ticker": {"type": "STRING"},
+            "company": {"type": "STRING"},
+            "signal": {"type": "STRING", "enum": ["Positive", "Neutral", "Risk"]},
+            "confidence": {"type": "INTEGER"},
+            "summary": {"type": "STRING"},
+            "event_type": {"type": "STRING"},
+            "key_facts": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "risk_factors": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "chain_of_thought": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "actual_eps": {"type": "NUMBER"},
+            "consensus_eps": {"type": "NUMBER"},
+            "eps_surprise_pct": {"type": "NUMBER"},
+            "actual_revenue_millions": {"type": "NUMBER"},
+            "consensus_revenue_millions": {"type": "NUMBER"},
+            "revenue_surprise_pct": {"type": "NUMBER"},
+            "guidance_direction": {"type": "STRING"},
+            "guidance_magnitude_pct": {"type": "NUMBER"},
+            "next_quarter_eps_guide": {"type": "NUMBER"},
+        },
+        "required": ["signal", "confidence", "summary", "event_type"],
+    }
 
     def classify(self, filing: RawFiling) -> dict:
         """Classify 8-K filing with Gemini (via Emergent key fallback)."""
@@ -60,7 +91,11 @@ IMPORTANT classification rules:
         prompt = f"{self.SYSTEM_PROMPT}\n\nAnalyze this SEC 8-K filing:\n\n{text}"
 
         try:
-            response_text = call_gemini(prompt, session_id=f"8k-{filing.accession_number}")
+            response_text = call_gemini(
+                prompt,
+                session_id=f"8k-{filing.accession_number}",
+                response_schema=self.RESPONSE_SCHEMA,
+            )
 
             if not response_text:
                 raise ValueError("Empty response from AI")
@@ -74,6 +109,18 @@ IMPORTANT classification rules:
                         response_text = response_text[4:]
 
             result = json.loads(response_text.strip())
+
+            # Build form_data with earnings quantification fields
+            form_data = {}
+            for field in [
+                "actual_eps", "consensus_eps", "eps_surprise_pct",
+                "actual_revenue_millions", "consensus_revenue_millions",
+                "revenue_surprise_pct", "guidance_direction",
+                "guidance_magnitude_pct", "next_quarter_eps_guide",
+            ]:
+                if result.get(field) is not None:
+                    form_data[field] = result[field]
+
             return {
                 "ticker": str(result.get("ticker", "UNKNOWN")).upper(),
                 "company": str(result.get("company", filing.company_name)),
@@ -82,6 +129,9 @@ IMPORTANT classification rules:
                 "confidence": min(100, max(0, int(result.get("confidence", 50)))),
                 "chain_of_thought": result.get("chain_of_thought"),
                 "key_facts": result.get("key_facts", []),
+                "event_type": result.get("event_type"),
+                "risk_factors": result.get("risk_factors", []),
+                "form_data": form_data if form_data else None,
             }
         except json.JSONDecodeError as e:
             logger.error(f"[PIPELINE] Failed to parse Gemini response: {e}")

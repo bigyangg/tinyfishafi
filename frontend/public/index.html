@@ -23,6 +23,13 @@
         Learn how to configure a non-root public URL by running `npm run build`.
         -->
     <title>AFI | Autonomous Filing Intelligence</title>
+    <script>
+      try {
+        if (localStorage.getItem('afi_theme') === 'light') {
+          document.body.classList.add('theme-light');
+        }
+      } catch(e) {}
+    </script>
     <script>window.addEventListener("error", function (e) { if (e.error instanceof DOMException && e.error.name === "DataCloneError" && e.message && e.message.includes("PerformanceServerTiming")) { e.stopImmediatePropagation(); e.preventDefault() } }, true);</script>
 </head>
 
