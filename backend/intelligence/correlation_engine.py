@@ -1,6 +1,7 @@
 # correlation_engine.py — Sector Ripple & Market Correlation Engine
 # Purpose: Maps sector relationships, supply chains, and event propagation
 # Powers: /api/signals/{id}/ripple, /api/correlations/graph, /api/market/timeline
+#         build_correlations() — per-signal enrichment called from signal_pipeline
 
 import logging
 from datetime import datetime, timedelta
@@ -333,3 +334,238 @@ def build_event_chains(signals: list) -> list[dict]:
             })
 
     return sorted(chains, key=lambda x: x["chain_impact"], reverse=True)
+
+
+# ── NEW: Competitor map (for build_correlations) ────────────────────────────
+COMPETITORS = {
+    "NVDA": ["AMD", "INTC", "QCOM"],
+    "AMD":  ["NVDA", "INTC"],
+    "INTC": ["NVDA", "AMD", "TSM"],
+    "AAPL": ["MSFT", "GOOG"],
+    "MSFT": ["AAPL", "GOOG", "AMZN"],
+    "GOOG": ["MSFT", "META", "AAPL"],
+    "META": ["GOOG", "SNAP"],
+    "AMZN": ["MSFT", "WMT", "GOOG"],
+    "TSLA": ["RIVN", "GM", "F", "LCID", "NIO"],
+    "COIN": ["SQ", "HOOD", "MSTR"],
+    "NFLX": ["DIS", "WBD", "PARA"],
+    "JPM":  ["BAC", "WFC", "GS", "MS"],
+    "GS":   ["MS", "JPM", "BAC"],
+    "XOM":  ["CVX", "COP", "BP"],
+    "CVX":  ["XOM", "COP"],
+    "LMT":  ["RTX", "NOC", "GD", "BA"],
+    "WMT":  ["TGT", "COST", "AMZN"],
+    "PFE":  ["MRK", "JNJ", "ABBV", "LLY"],
+    "V":    ["MA", "PYPL", "AXP"],
+    "CRM":  ["NOW", "MSFT", "SAP"],
+    "SNOW": ["DDOG", "MDB", "AMZN"],
+}
+
+# ── NEW: Ticker → sector label (display-friendly) ───────────────────────────
+TICKER_SECTOR = {
+    "NVDA":"Semiconductors","AMD":"Semiconductors","INTC":"Semiconductors",
+    "TSM":"Semiconductors","ASML":"Semiconductors","QCOM":"Semiconductors",
+    "AVGO":"Semiconductors","LRCX":"Semiconductors","KLAC":"Semiconductors",
+    "AMAT":"Semiconductors","MU":"Semiconductors","MRVL":"Semiconductors",
+    "AAPL":"Big Tech","MSFT":"Big Tech","GOOG":"Big Tech",
+    "META":"Big Tech","AMZN":"Big Tech","NFLX":"Big Tech",
+    "CRM":"Cloud","NOW":"Cloud","SNOW":"Cloud","DDOG":"Cloud",
+    "NET":"Cloud","MDB":"Cloud","ZS":"Cloud","OKTA":"Cloud",
+    "V":"Fintech","MA":"Fintech","PYPL":"Fintech","SQ":"Fintech",
+    "COIN":"Fintech","AFRM":"Fintech","HOOD":"Fintech",
+    "TSLA":"EV/Auto","RIVN":"EV/Auto","LCID":"EV/Auto",
+    "GM":"EV/Auto","F":"EV/Auto","NIO":"EV/Auto",
+    "XOM":"Energy","CVX":"Energy","COP":"Energy",
+    "SLB":"Energy","HAL":"Energy","BP":"Energy",
+    "JPM":"Banking","BAC":"Banking","WFC":"Banking",
+    "GS":"Banking","MS":"Banking","C":"Banking",
+    "PFE":"Pharma","MRK":"Pharma","JNJ":"Pharma",
+    "ABBV":"Pharma","LLY":"Pharma","GILD":"Pharma",
+    "BMY":"Pharma","AMGN":"Pharma",
+    "LMT":"Defense","RTX":"Defense","NOC":"Defense",
+    "GD":"Defense","BA":"Defense","HII":"Defense",
+    "WMT":"Retail","TGT":"Retail","COST":"Retail",
+    "HD":"Retail","LOW":"Retail",
+    "AAL":"Airlines","DAL":"Airlines","UAL":"Airlines",
+    "LUV":"Airlines","JBLU":"Airlines",
+}
+
+# ── NEW: Sector ripple rules ─────────────────────────────────────────────────
+_SECTOR_RIPPLE = {
+    ("Semiconductors", "EARNINGS_BEAT"): [
+        {"sector": "Big Tech", "direction": "positive", "reason": "Better chip supply reduces AI infrastructure costs"},
+        {"sector": "Cloud", "direction": "positive", "reason": "GPU availability accelerates cloud expansion"},
+        {"sector": "EV/Auto", "direction": "positive", "reason": "Chip supply improves EV production capacity"},
+    ],
+    ("Semiconductors", "EARNINGS_MISS"): [
+        {"sector": "Big Tech", "direction": "negative", "reason": "AI capex may slow if chip demand weakens"},
+        {"sector": "Cloud", "direction": "negative", "reason": "Data center expansion may face headwinds"},
+    ],
+    ("Energy", "EARNINGS_BEAT"): [
+        {"sector": "Airlines", "direction": "negative", "reason": "Higher energy prices increase jet fuel costs"},
+        {"sector": "EV/Auto", "direction": "positive", "reason": "Oil price strength accelerates EV adoption"},
+        {"sector": "Defense", "direction": "positive", "reason": "Energy geopolitics drive defense spending"},
+    ],
+    ("Banking", "EARNINGS_BEAT"): [
+        {"sector": "Fintech", "direction": "negative", "reason": "Strong bank results reduce fintech disruption narrative"},
+        {"sector": "Big Tech", "direction": "positive", "reason": "Healthy credit markets support tech M&A"},
+    ],
+    ("Big Tech", "EARNINGS_BEAT"): [
+        {"sector": "Cloud", "direction": "positive", "reason": "Enterprise cloud spend confirmed strong"},
+        {"sector": "Semiconductors", "direction": "positive", "reason": "High AI spend confirms chip demand"},
+    ],
+    ("Pharma", "REGULATORY_ACTION"): [
+        {"sector": "Pharma", "direction": "negative", "reason": "Regulatory risk reprices entire sector"},
+    ],
+    ("EV/Auto", "EARNINGS_MISS"): [
+        {"sector": "Semiconductors", "direction": "negative", "reason": "Weaker EV demand reduces chip orders"},
+        {"sector": "Energy", "direction": "positive", "reason": "EV slowdown delays oil demand decline"},
+    ],
+}
+
+# ── NEW: Macro event rules ───────────────────────────────────────────────────
+_MACRO_RULES = {
+    "INTEREST_RATE_HIKE": [
+        {"sector": "Banking", "direction": "positive", "reason": "Higher rates improve net interest margin"},
+        {"sector": "Big Tech", "direction": "negative", "reason": "Rate hikes compress growth stock multiples"},
+        {"sector": "Fintech", "direction": "negative", "reason": "Higher cost of capital hurts lending fintechs"},
+    ],
+    "OIL_SPIKE": [
+        {"sector": "Energy", "direction": "positive", "reason": "Direct revenue benefit from higher oil prices"},
+        {"sector": "Airlines", "direction": "negative", "reason": "Jet fuel is 20-30% of airline operating costs"},
+        {"sector": "EV/Auto", "direction": "positive", "reason": "Oil spike accelerates EV adoption"},
+    ],
+}
+
+
+def build_correlations(signal: dict, enrichment_data: dict) -> dict:
+    """
+    Per-signal correlation enrichment. Called from signal_pipeline after classification.
+    Returns structured correlation data for DB storage.
+    signal: dict with keys 'ticker', 'event_type', 'signal'
+    enrichment_data: dict from enrichment pipeline (may have 'news_dominant_theme')
+    """
+    ticker = (signal.get("ticker") or "").upper()
+    event_type = signal.get("event_type", "")
+    signal_direction = signal.get("signal", "Neutral")
+    sector = TICKER_SECTOR.get(ticker, "Unknown")
+
+    related_entities = []
+    sector_links = []
+    chain_reactions = []
+
+    # 1. Competitor impact (usually inverse)
+    for competitor in COMPETITORS.get(ticker, []):
+        comp_sector = TICKER_SECTOR.get(competitor, sector)
+        direction = (
+            "negative" if signal_direction == "Positive"
+            else "positive" if signal_direction == "Risk"
+            else "neutral"
+        )
+        related_entities.append({
+            "ticker": competitor,
+            "relationship": "competitor",
+            "sector": comp_sector,
+            "impact_direction": direction,
+            "reason": (
+                f"{ticker} strength puts competitive pressure on {competitor}"
+                if signal_direction == "Positive"
+                else f"{ticker} weakness may benefit {competitor}"
+            ),
+            "confidence": 0.7,
+        })
+
+    # 2. Supply chain (use existing SUPPLY_CHAIN dict)
+    sc = SUPPLY_CHAIN.get(ticker, {})
+    for supplier in sc.get("suppliers", []):
+        related_entities.append({
+            "ticker": supplier,
+            "relationship": "supplier",
+            "sector": TICKER_SECTOR.get(supplier, "Unknown"),
+            "impact_direction": (
+                "positive" if signal_direction == "Positive"
+                else "negative" if signal_direction == "Risk"
+                else "neutral"
+            ),
+            "reason": (
+                f"{ticker} growth drives higher orders for {supplier}"
+                if signal_direction == "Positive"
+                else f"{ticker} slowdown reduces orders from {supplier}"
+            ),
+            "confidence": 0.8,
+        })
+    for customer in sc.get("customers", []):
+        related_entities.append({
+            "ticker": customer,
+            "relationship": "customer",
+            "sector": TICKER_SECTOR.get(customer, "Unknown"),
+            "impact_direction": (
+                "positive" if signal_direction == "Positive"
+                else "negative" if signal_direction == "Risk"
+                else "neutral"
+            ),
+            "reason": (
+                f"{ticker} supply improvement benefits {customer}"
+                if signal_direction == "Positive"
+                else f"{ticker} supply issues create risk for {customer}"
+            ),
+            "confidence": 0.75,
+        })
+
+    # 3. Sector ripple
+    ripple_key = (sector, event_type)
+    for ripple in _SECTOR_RIPPLE.get(ripple_key, []):
+        sector_links.append({
+            "sector": ripple["sector"],
+            "direction": ripple["direction"],
+            "reason": ripple["reason"],
+            "triggered_by": f"{ticker} {event_type}",
+            "confidence": 0.65,
+        })
+
+    # 4. Chain reactions
+    if event_type == "EARNINGS_BEAT":
+        chain_reactions = [
+            {"layer": "immediate", "effect": f"{ticker} stock likely gaps up at open", "timeframe": "0-24h"},
+            {"layer": "secondary", "effect": f"Competitors ({', '.join(COMPETITORS.get(ticker, [])[:2])}) may face selling pressure", "timeframe": "1-3 days"},
+            {"layer": "sector_ripple", "effect": f"{sector} sector ETF likely outperforms", "timeframe": "1-5 days"},
+        ]
+    elif event_type == "EARNINGS_MISS":
+        chain_reactions = [
+            {"layer": "immediate", "effect": f"{ticker} stock likely gaps down at open", "timeframe": "0-24h"},
+            {"layer": "secondary", "effect": f"Analysts may downgrade sector peers. Watch: {', '.join(COMPETITORS.get(ticker, [])[:2])}", "timeframe": "1-3 days"},
+            {"layer": "sector_ripple", "effect": f"Risk-off sentiment may spread across {sector}", "timeframe": "2-7 days"},
+        ]
+    elif event_type in ("EXEC_DEPARTURE", "EXEC_HIRE"):
+        chain_reactions = [
+            {"layer": "immediate", "effect": "Volatility spike as market reprices leadership risk", "timeframe": "0-48h"},
+            {"layer": "secondary", "effect": "Strategy uncertainty may delay enterprise deals", "timeframe": "1-4 weeks"},
+        ]
+    elif event_type == "ACTIVIST_ENTRY":
+        chain_reactions = [
+            {"layer": "immediate", "effect": "Stock premium on takeover/restructuring speculation", "timeframe": "0-24h"},
+            {"layer": "secondary", "effect": "Peers may see activist copycat positioning", "timeframe": "1-4 weeks"},
+        ]
+    elif event_type == "MERGER_ACQUISITION":
+        chain_reactions = [
+            {"layer": "immediate", "effect": "Target stock premiums typically 20-40% on announcement", "timeframe": "0-24h"},
+            {"layer": "secondary", "effect": "Acquirer may face integration cost concerns", "timeframe": "1-4 weeks"},
+            {"layer": "sector_ripple", "effect": "M&A activity often triggers sector consolidation wave", "timeframe": "1-6 months"},
+        ]
+
+    # 5. Macro links
+    macro_links = []
+    news_theme = (enrichment_data.get("news_dominant_theme") or "").lower()
+    if "rate" in news_theme or "fed" in news_theme:
+        macro_links.extend(_MACRO_RULES.get("INTEREST_RATE_HIKE", []))
+    if "oil" in news_theme or "energy" in news_theme:
+        macro_links.extend(_MACRO_RULES.get("OIL_SPIKE", []))
+
+    return {
+        "related_entities": related_entities[:10],
+        "sector_links": sector_links,
+        "macro_links": macro_links,
+        "chain_reactions": chain_reactions,
+        "sector": sector,
+        "correlation_version": "1.0",
+    }

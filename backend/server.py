@@ -1,10 +1,10 @@
 # server.py — AFI Backend (FastAPI + Supabase)
 # Purpose: Auth, signals, watchlist, EDGAR agent control, health, telegram test, AI brief, SSE logs
-# Dependencies: fastapi, supabase, pyjwt, httpx, google-generativeai
+# Dependencies: fastapi, supabase, pyjwt, httpx, google-genai
 # Env vars: SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, CORS_ORIGINS
 
 import asyncio
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, BackgroundTasks
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
@@ -400,6 +400,20 @@ async def edgar_stop():
     edgar_agent_instance.stop()
     return {"status": "stopped", "message": "EDGAR polling agent stopped"}
 
+@api_router.post("/edgar/backfill")
+async def trigger_backfill(background_tasks: BackgroundTasks, days: int = 5):
+    """Trigger a backfill of recent EDGAR filings that failed or were never processed."""
+    from edgar_agent import backfill_recent_filings
+    if edgar_agent_instance is None or edgar_agent_instance._pipeline is None:
+        raise HTTPException(status_code=503, detail="Pipeline not initialized")
+    background_tasks.add_task(
+        backfill_recent_filings,
+        supabase,
+        edgar_agent_instance._pipeline,
+        days,
+    )
+    return {"status": "backfill started", "days": days}
+
 # ============ MANUAL FETCH ============
 class ManualFetch(BaseModel):
     ticker: str
@@ -425,11 +439,12 @@ async def edgar_fetch_company(data: ManualFetch):
 
 @api_router.get("/leaderboard/divergence")
 async def get_divergence_leaderboard():
-    """Return companies ranked by divergence score (>30), deduplicated by ticker."""
+    """Return companies ranked by divergence score, deduplicated by ticker.
+    Falls back to top signals by impact_score when no divergence data exists."""
     try:
         result = supabase.table("signals") \
-            .select("id,ticker,company,filing_type,divergence_score,divergence_severity,contradiction_summary,public_claim,filing_reality,filed_at,summary,classification") \
-            .gt("divergence_score", 30) \
+            .select("id,ticker,company,filing_type,divergence_score,divergence_severity,divergence_type,contradiction_summary,public_claim,filing_reality,filed_at,summary,confidence,signal,event_type,impact_score") \
+            .gt("divergence_score", 0) \
             .order("divergence_score", desc=True) \
             .limit(100) \
             .execute()
@@ -439,16 +454,52 @@ async def get_divergence_leaderboard():
         # Deduplicate: keep highest divergence_score per ticker
         seen = {}
         for row in rows:
-            ticker = row.get("ticker", "UNKNOWN")
-            if ticker not in seen or (row.get("divergence_score", 0) or 0) > (seen[ticker].get("divergence_score", 0) or 0):
+            ticker = row.get("ticker") or "UNKNOWN"
+            if not ticker:
+                continue
+            existing = seen.get(ticker)
+            if existing is None or (row.get("divergence_score") or 0) > (existing.get("divergence_score") or 0):
                 seen[ticker] = row
 
-        leaderboard = sorted(seen.values(), key=lambda x: -(x.get("divergence_score", 0) or 0))
+        leaderboard = sorted(seen.values(), key=lambda x: -(x.get("divergence_score") or 0))
 
-        return {"leaderboard": leaderboard, "count": len(leaderboard)}
+        # Fallback: no divergence data yet — show top signals by impact_score
+        if not leaderboard:
+            backfill_result = supabase.table("signals") \
+                .select("id,ticker,company,filing_type,confidence,signal,event_type,impact_score,summary,filed_at") \
+                .gt("confidence", 40) \
+                .order("impact_score", desc=True) \
+                .limit(20) \
+                .execute()
+            leaderboard = [
+                {
+                    **row,
+                    "divergence_score": 0,
+                    "divergence_severity": "NONE",
+                    "divergence_type": "NO_DATA",
+                    "contradiction_summary": "No divergence analysis yet. Run a sweep to generate data.",
+                }
+                for row in (backfill_result.data or [])
+            ]
+        elif len(leaderboard) < 10:
+            # Top up with high-confidence signals not already in results
+            backfill_result = supabase.table("signals") \
+                .select("id,ticker,company,filing_type,divergence_score,divergence_severity,divergence_type,contradiction_summary,public_claim,filing_reality,filed_at,summary,confidence,signal,event_type,impact_score") \
+                .order("confidence", desc=True) \
+                .limit(50) \
+                .execute()
+            for row in (backfill_result.data or []):
+                ticker = row.get("ticker") or "UNKNOWN"
+                if ticker and ticker not in seen:
+                    seen[ticker] = row
+                    leaderboard.append(row)
+                if len(leaderboard) >= 10:
+                    break
+
+        return {"leaderboard": leaderboard, "results": leaderboard, "count": len(leaderboard)}
     except Exception as e:
         logger.error(f"[LEADERBOARD] Divergence fetch failed: {e}")
-        return {"leaderboard": [], "count": 0}
+        return {"leaderboard": [], "results": [], "count": 0}
 
 # ============ DEMO TRIGGER ============
 class DemoTrigger(BaseModel):
@@ -691,102 +742,79 @@ async def trigger_all_forms(body: dict):
 
         pipeline_log("SYSTEM", f"Found {len(found_forms)}/{len(ALL_FORMS)} form types: {', '.join(found_forms.keys())}", run_id=run_id)
 
-        # Step 4: Process each form type in background
+        # Step 4: Batch extract all filings simultaneously via TinyFish, then classify in parallel
         cik_clean = str(int(cik))
         results = []
 
+        use_tinyfish = os.environ.get("USE_TINYFISH", "true").lower() == "true"
+        api_key = os.environ.get("TINYFISH_API_KEY", "")
+
+        # Build batch input — one entry per found form
+        batch_filings = []
+        for form_key, filing_info in found_forms.items():
+            if filing_info.get("primary_doc"):
+                doc_url = (
+                    f"https://www.sec.gov/Archives/edgar/data/"
+                    f"{cik_clean}/{filing_info['accession_clean']}/"
+                    f"{filing_info['primary_doc']}"
+                )
+                batch_filings.append({
+                    "id": form_key,
+                    "url": doc_url,
+                    "form_type": filing_info["form"],
+                    "ticker": ticker,
+                    "company": entity_name,
+                })
+
+        # Step 4a: TinyFish batch extraction (all forms simultaneously)
+        extracted_texts: dict[str, str] = {}
+        if use_tinyfish and api_key and batch_filings:
+            pipeline_log("TINYFISH", f"[{ticker}] Batch submitting {len(batch_filings)} forms to TinyFish simultaneously...", "info", run_id=run_id)
+            try:
+                from intelligence.tinyfish_batch import batch_extract_filings
+
+                def _batch_log(msg, level="info"):
+                    pipeline_log("TINYFISH", msg, level, run_id=run_id)
+
+                extracted_texts = await batch_extract_filings(
+                    filings=batch_filings,
+                    log_fn=_batch_log,
+                )
+                hit = sum(1 for v in extracted_texts.values() if v)
+                pipeline_log("TINYFISH", f"[{ticker}] Batch complete — {hit}/{len(batch_filings)} extracted", "info", run_id=run_id)
+            except Exception as e:
+                pipeline_log("TINYFISH", f"[{ticker}] Batch extraction failed: {e} — falling back to HTTP", "warning", run_id=run_id)
+
+        # Step 4b: For any form not extracted by TinyFish, do HTTP fallback
+        for form_key, filing_info in found_forms.items():
+            if form_key not in extracted_texts or not extracted_texts[form_key]:
+                if filing_info.get("primary_doc"):
+                    doc_url = (
+                        f"https://www.sec.gov/Archives/edgar/data/"
+                        f"{cik_clean}/{filing_info['accession_clean']}/"
+                        f"{filing_info['primary_doc']}"
+                    )
+                    try:
+                        async with httpx.AsyncClient(timeout=15) as client:
+                            r = await client.get(doc_url, headers={"User-Agent": "AFI demo@afi.com"})
+                        if r.status_code == 200:
+                            extracted_texts[form_key] = r.text[:15000]
+                            pipeline_log("TINYFISH", f"[{ticker}/{filing_info['form']}] HTTP fallback: {len(extracted_texts[form_key])} chars", "info", run_id=run_id)
+                    except Exception as e:
+                        pipeline_log("TINYFISH", f"[{ticker}/{filing_info['form']}] HTTP fallback failed: {e}", "warning", run_id=run_id)
+
+        # Step 4c: Process all forms through pipeline in parallel (Gemini + enrichment)
         async def _process_form(form_key, filing_info):
             try:
                 actual_form = filing_info["form"]
-                pipeline_log("SYSTEM", f"[{ticker}] Processing {actual_form} filed {filing_info['date']}...", run_id=run_id)
+                filing_text = extracted_texts.get(form_key, "")
+                pipeline_log("PIPELINE", f"[{ticker}/{actual_form}] Classifying with Gemini ({len(filing_text)} chars)...", run_id=run_id)
 
                 filing_url = (
                     f"https://www.sec.gov/Archives/edgar/data/"
                     f"{cik_clean}/{filing_info['accession_clean']}/"
                     f"{filing_info['accession_dashes']}-index.htm"
                 )
-
-                filing_text = None
-                if filing_info["primary_doc"]:
-                    doc_url = (
-                        f"https://www.sec.gov/Archives/edgar/data/"
-                        f"{cik_clean}/{filing_info['accession_clean']}/"
-                        f"{filing_info['primary_doc']}"
-                    )
-                    
-                    # --- DEEP TINYFISH INTEGRATION ---
-                    # We stream the agent's chain-of-thought directly into the pipeline_log
-                    api_key = os.environ.get("TINYFISH_API_KEY", "")
-                    use_tinyfish = os.environ.get("USE_TINYFISH", "true").lower() == "true"
-                    
-                    if use_tinyfish and api_key:
-                        pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] Booting remote web agent...", "info", run_id=run_id)
-                        goal = (
-                            "Carefully extract the full text content of this SEC filing. "
-                            "Return the complete text of all items disclosed, including any financial figures, "
-                            "executive changes, agreements, or events described. "
-                            "Return as plain text JSON: {\"text\": \"<full filing content>\"}"
-                        )
-                        try:
-                            async with httpx.AsyncClient() as client:
-                                async with client.stream(
-                                    "POST",
-                                    "https://agent.tinyfish.ai/v1/automation/run-sse",
-                                    headers={
-                                        "X-API-Key": api_key,
-                                        "Content-Type": "application/json"
-                                    },
-                                    json={
-                                        "url": doc_url,
-                                        "goal": goal,
-                                        "browser_profile": "stealth"
-                                    },
-                                    timeout=120
-                                ) as tf_resp:
-                                    if tf_resp.status_code == 200:
-                                        async for line in tf_resp.aiter_lines():
-                                            if not line or not line.startswith("data:"): continue
-                                            raw = line[5:].strip()
-                                            if not raw: continue
-                                            try:
-                                                event = json.loads(raw)
-                                                if event.get("type") == "PROGRESS":
-                                                    msg = event.get("message", "")
-                                                    if msg:
-                                                        pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] {msg}", "info", run_id=run_id)
-                                                elif event.get("type") == "COMPLETE" and event.get("status") == "COMPLETED":
-                                                    res = event.get("resultJson") or event.get("result", "")
-                                                    if isinstance(res, dict): filing_text = res.get("text", str(res))
-                                                    elif isinstance(res, str):
-                                                        try: filing_text = json.loads(res).get("text", res)
-                                                        except: filing_text = res
-                                                    if filing_text: filing_text = filing_text[:15000]
-                                                    pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] Agent extracted {len(filing_text or '')} chars", "success", run_id=run_id)
-                                                elif event.get("type") == "ERROR":
-                                                    pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] Agent error: {event.get('message')}", "error", run_id=run_id)
-                                            except json.JSONDecodeError:
-                                                pass
-                                    else:
-                                        pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] HTTP {tf_resp.status_code}", "warning", run_id=run_id)
-                        except Exception as e:
-                            pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] Stream connection failed: {e}", "warning", run_id=run_id)
-
-                    # --- FALLBACK ---
-                    if not filing_text:
-                        pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] Falling back to SEC HTTP get...", "warning", run_id=run_id)
-                        try:
-                            async with httpx.AsyncClient() as client:
-                                doc_resp = await client.get(
-                                    doc_url,
-                                    headers={"User-Agent": "AFI demo@afi.com"},
-                                    timeout=15,
-                                )
-                            if doc_resp.status_code == 200:
-                                filing_text = doc_resp.text[:15000]
-                                pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] Fetched {len(filing_text)} chars from SEC", "success", run_id=run_id)
-                        except Exception:
-                            pipeline_log("TINYFISH", f"[{ticker}/{actual_form}] Could not fetch text", "warning", run_id=run_id)
-
                 demo_accession = f"demo_{filing_info['accession_dashes']}_{int(time.time())}"
 
                 raw_filing = RawFiling(
@@ -799,17 +827,13 @@ async def trigger_all_forms(body: dict):
                     filing_text=filing_text,
                 )
 
-                pipeline_log("PIPELINE", f"[{ticker}/{actual_form}] Classifying with Gemini...", run_id=run_id)
                 pipe = SignalPipeline(supabase)
-                
-                # Run the heavy, synchronous pipeline in a separate thread to avoid blocking the event loop
                 signal = await asyncio.to_thread(pipe.process, raw_filing, run_id=run_id)
 
                 if signal:
                     row = pipe.signal_to_db_row(signal)
-                    # Run synchronous Supabase insert in a thread too
                     await asyncio.to_thread(supabase.table("signals").insert(row).execute)
-                    pipeline_log("PIPELINE", f"[{ticker}/{actual_form}] {signal.signal} (conf {signal.confidence}) — {signal.summary[:60]}", "success", run_id=run_id)
+                    pipeline_log("PIPELINE", f"[{ticker}/{actual_form}] {signal.signal} conf:{signal.confidence} — {signal.summary[:60]}", "success", run_id=run_id)
                     return {"form": actual_form, "signal": signal.signal, "confidence": signal.confidence, "event_type": signal.event_type}
                 else:
                     pipeline_log("PIPELINE", f"[{ticker}/{actual_form}] No signal produced", "warning", run_id=run_id)
@@ -823,9 +847,18 @@ async def trigger_all_forms(body: dict):
             from telegram_bot import send_trigger_summary
             signals_generated = 0
             try:
-                for form_key, filing_info in found_forms.items():
-                    result = await _process_form(form_key, filing_info)
-                    results.append(result)
+                # Run all pipeline classifications in parallel (Gemini calls are independent)
+                pipeline_log("PIPELINE", f"[{ticker}] Running {len(found_forms)} Gemini classifications in parallel...", run_id=run_id)
+                form_tasks = [
+                    _process_form(form_key, filing_info)
+                    for form_key, filing_info in found_forms.items()
+                ]
+                form_results = await asyncio.gather(*form_tasks, return_exceptions=True)
+                for r in form_results:
+                    if isinstance(r, Exception):
+                        results.append({"error": str(r)})
+                    else:
+                        results.append(r)
             
                 for res in results:
                     if res:
@@ -863,15 +896,24 @@ async def trigger_all_forms(body: dict):
 
 # ============ SSE LOG STREAM ============
 import asyncio
+from collections import deque
 from typing import Dict, List, Any
 
 # In-memory store for recent pipeline runs so the Logs UI survives refreshes
 recent_runs: Dict[str, Dict[str, Any]] = {}
 
+# Raw log buffer — keeps last 500 entries, survives page navigations
+_LOG_BUFFER: deque = deque(maxlen=500)
+
 @api_router.get("/logs/history")
 async def get_logs_history():
     """Returns the last 50 pipeline runs so the frontend Logs UI can survive a refresh."""
     return {"runs": list(recent_runs.values())}
+
+@api_router.get("/logs/history-raw")
+async def get_logs_history_raw():
+    """Returns the raw log buffer (last 500 entries) for Logs page pre-population."""
+    return list(_LOG_BUFFER)
 
 # Global queue for SSE live logs
 log_queue = asyncio.Queue()
@@ -935,37 +977,6 @@ async def update_config(data: ConfigUpdate):
         logger.error(f"Failed to update config: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# ============ DIVERGENCE LEADERBOARD ============
-@api_router.get("/leaderboard/divergence")
-async def get_divergence_leaderboard():
-    """Returns signals ranked by divergence score (SAID vs FILED contradiction).
-    Deduplicates by ticker, keeping the highest divergence score."""
-    try:
-        result = supabase.table("signals") \
-            .select("id, ticker, company, filing_type, divergence_score, divergence_severity, contradiction_summary, public_claim, filing_reality") \
-            .gt("divergence_score", 0) \
-            .order("divergence_score", desc=True) \
-            .limit(100) \
-            .execute()
-
-        rows = result.data or []
-
-        # Deduplicate by ticker — keep highest divergence score per ticker
-        seen = {}
-        for row in rows:
-            ticker = row.get("ticker", "")
-            if not ticker:
-                continue
-            existing = seen.get(ticker)
-            if existing is None or (row.get("divergence_score") or 0) > (existing.get("divergence_score") or 0):
-                seen[ticker] = row
-
-        leaderboard = sorted(seen.values(), key=lambda x: x.get("divergence_score", 0), reverse=True)
-        return {"leaderboard": leaderboard, "total": len(leaderboard)}
-    except Exception as e:
-        logger.error(f"Leaderboard query failed: {e}")
-        return {"leaderboard": [], "total": 0, "error": str(e)}
-
 # ============ FAILED FILINGS (DEAD-LETTER QUEUE) ============
 @api_router.get("/failed-filings")
 async def get_failed_filings():
@@ -1001,6 +1012,32 @@ async def health_check():
 @api_router.get("/")
 async def root():
     return {"status": "ok", "service": "AFI API", "database": "supabase"}
+
+# ============ PIPELINE STATUS ============
+@api_router.get("/pipeline/status")
+async def get_pipeline_status(current_user=Depends(get_current_user)):
+    """Returns pipeline health summary for the last 24h."""
+    try:
+        since_24h = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        result = supabase.table("signals") \
+            .select("signal,confidence,created_at") \
+            .gte("created_at", since_24h) \
+            .execute()
+        signals = result.data or []
+        good = [s for s in signals if (s.get("confidence") or 0) > 50]
+        avg_conf = sum((s.get("confidence") or 0) for s in signals) / len(signals) if signals else 0
+        edgar_status = edgar_agent_instance.get_status() if edgar_agent_instance else {"agent_status": "not_initialized"}
+        edgar_running = edgar_status.get("agent_status") == "running"
+        return {
+            "signals_24h": len(signals),
+            "good_signals_24h": len(good),
+            "avg_confidence": round(avg_conf, 1),
+            "edgar_running": edgar_running,
+            "status": "healthy" if len(good) >= 5 and edgar_running else "degraded",
+        }
+    except Exception as e:
+        logger.error(f"[PIPELINE] Status error: {e}")
+        return {"signals_24h": 0, "good_signals_24h": 0, "avg_confidence": 0, "edgar_running": False, "status": "error"}
 
 # ============ MARKET PULSE SCORE ============
 _pulse_cache = {"data": None, "ts": 0}
@@ -1099,6 +1136,34 @@ async def get_signal_ripple(signal_id: str):
         logger.error(f"[RIPPLE] Ripple failed for {signal_id}: {e}")
         return {"targets": [], "error": str(e)}
 
+# ============ CHAIN REACTIONS ============
+@app.get("/api/signals/{signal_id}/chain-reactions")
+async def get_chain_reactions(signal_id: str, request: Request):
+    """Return chain reactions and related entities for a signal."""
+    try:
+        result = supabase.table("signals")\
+            .select("ticker,chain_reactions,correlations,sector,related_entities")\
+            .eq("id", signal_id)\
+            .single()\
+            .execute()
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Signal not found")
+        data = result.data
+        # Parse JSONB fields if they're strings
+        for field in ("chain_reactions", "correlations", "related_entities"):
+            if isinstance(data.get(field), str):
+                try:
+                    import json as _json
+                    data[field] = _json.loads(data[field])
+                except Exception:
+                    data[field] = []
+        return data
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[CHAIN-REACTIONS] {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ============ TINYFISH DEEP CONTEXT ============
 @api_router.get("/signals/{signal_id}/context")
 async def get_signal_context(signal_id: str):
@@ -1134,24 +1199,159 @@ async def get_signal_context(signal_id: str):
         return {"status": "unavailable", "error": str(e)}
 
 # ============ CORRELATION GRAPH ============
-@api_router.get("/correlations/graph")
+@app.get("/api/correlations/graph")
 async def get_correlation_graph():
-    """Returns force-graph data for the GRAPH view (nodes + edges + signal overlays)."""
+    """Returns complete force-graph with cross-sector competitor + supply chain links."""
+    from intelligence.correlation_engine import COMPETITORS, SUPPLY_CHAIN, TICKER_SECTOR
+    from datetime import datetime, timedelta
+
+    COMPANY_NAMES = {
+        "NVDA": "NVIDIA Corporation", "AMD": "Advanced Micro Devices", "INTC": "Intel Corporation",
+        "QCOM": "Qualcomm", "TSM": "Taiwan Semiconductor", "AVGO": "Broadcom",
+        "AAPL": "Apple Inc.", "MSFT": "Microsoft Corporation", "GOOGL": "Alphabet Inc.",
+        "META": "Meta Platforms", "AMZN": "Amazon.com", "TSLA": "Tesla Inc.",
+        "NFLX": "Netflix", "CRM": "Salesforce", "ORCL": "Oracle", "IBM": "IBM",
+        "JPM": "JPMorgan Chase", "BAC": "Bank of America", "GS": "Goldman Sachs",
+        "MS": "Morgan Stanley", "WFC": "Wells Fargo", "C": "Citigroup",
+        "JNJ": "Johnson & Johnson", "UNH": "UnitedHealth Group", "PFE": "Pfizer",
+        "ABBV": "AbbVie", "MRK": "Merck", "LLY": "Eli Lilly",
+        "XOM": "ExxonMobil", "CVX": "Chevron", "COP": "ConocoPhillips",
+        "WMT": "Walmart", "COST": "Costco", "TGT": "Target",
+        "BA": "Boeing", "RTX": "Raytheon", "LMT": "Lockheed Martin",
+        "COIN": "Coinbase", "MSTR": "MicroStrategy", "HOOD": "Robinhood",
+        "SPY": "S&P 500 ETF", "QQQ": "Nasdaq 100 ETF",
+    }
+
+    # Sector display colors (Title Case keys to match TICKER_SECTOR values)
+    SECTOR_COLORS = {
+        "Semiconductors": "#818cf8",
+        "Big Tech":       "#38bdf8",
+        "AI/Software":    "#a78bfa",
+        "Fintech":        "#4ade80",
+        "Banking":        "#34d399",
+        "Healthcare":     "#f472b6",
+        "Energy":         "#fb923c",
+        "Retail":         "#fbbf24",
+        "Aerospace":      "#94a3b8",
+        "Crypto":         "#f59e0b",
+        "ETF":            "#6b7280",
+        # Legacy keys from old correlation_engine — map to nearest new color
+        "Cloud":          "#38bdf8",
+        "Pharma":         "#f472b6",
+        "EV/Auto":        "#fb923c",
+        "Defense":        "#94a3b8",
+        "Airlines":       "#94a3b8",
+    }
+
+    # Get live signals (last 7 days)
+    signal_map = {}
     try:
-        from intelligence.correlation_engine import build_graph_data
-
-        result = supabase.table("signals") \
-            .select("id,ticker,signal,confidence,impact_score,event_type,summary,filed_at") \
+        cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+        r = supabase.table("signals") \
+            .select("ticker,signal,confidence,impact_score,event_type,filing_type,created_at") \
+            .gte("created_at", cutoff) \
             .order("created_at", desc=True) \
-            .limit(100) \
             .execute()
-
-        signals = result.data or []
-        graph = build_graph_data(signals)
-        return graph
+        for s in (r.data or []):
+            t = (s.get("ticker") or "").upper()
+            if t and t not in signal_map:
+                signal_map[t] = s
     except Exception as e:
-        logger.error(f"[GRAPH] Graph data failed: {e}")
-        return {"nodes": [], "edges": [], "sectors": [], "error": str(e)}
+        logger.warning(f"[GRAPH] Signal fetch failed: {e}")
+
+    # Collect all tickers: TICKER_SECTOR + COMPETITORS + signal tickers
+    all_tickers = set(TICKER_SECTOR.keys())
+    for comp_list in COMPETITORS.values():
+        all_tickers.update(comp_list)
+    for ticker in COMPETITORS:
+        all_tickers.add(ticker)
+    all_tickers.update(signal_map.keys())
+
+    # Build nodes
+    nodes = []
+    seen = set()
+    for ticker in sorted(all_tickers):
+        if ticker in seen:
+            continue
+        seen.add(ticker)
+        sig = signal_map.get(ticker)
+        sector = TICKER_SECTOR.get(ticker, "Other")
+        base_color = SECTOR_COLORS.get(sector, "#475569")
+        color = base_color
+        if sig:
+            if sig.get("signal") == "Positive":
+                color = "#34D399"
+            elif sig.get("signal") == "Risk":
+                color = "#F87171"
+        nodes.append({
+            "id": ticker,
+            "label": ticker,
+            "name": COMPANY_NAMES.get(ticker, ticker),
+            "sector": sector,
+            "color": color,
+            "baseColor": base_color,
+            "val": 5 if sig else 3,
+            "hasSignal": bool(sig),
+            "has_signal": bool(sig),
+            "signal": sig.get("signal") if sig else None,
+            "confidence": sig.get("confidence") if sig else None,
+            "impact_score": sig.get("impact_score") if sig else None,
+            "event_type": sig.get("event_type") if sig else None,
+            "filing_type": sig.get("filing_type") if sig else None,
+        })
+
+    # Build links
+    links = []
+    seen_links = set()
+
+    def add_link(source, target, link_type, value):
+        if source not in seen or target not in seen:
+            return
+        key = tuple(sorted([source, target]))
+        if key in seen_links:
+            return
+        seen_links.add(key)
+        links.append({"source": source, "target": target, "type": link_type, "value": value})
+
+    # Competitor links (cross-sector)
+    for ticker, comps in COMPETITORS.items():
+        for comp in comps:
+            add_link(ticker, comp, "competitor", 0.6)
+
+    # Supply chain links
+    for ticker, sc in SUPPLY_CHAIN.items():
+        for supplier in sc.get("suppliers", []):
+            add_link(ticker, supplier, "supply_chain", 0.85)
+        for customer in sc.get("customers", []):
+            add_link(ticker, customer, "customer", 0.7)
+
+    # Peer links within same sector
+    sector_tickers_map = {}
+    for ticker, sector in TICKER_SECTOR.items():
+        if ticker in seen:
+            sector_tickers_map.setdefault(sector, []).append(ticker)
+    for sector, tickers in sector_tickers_map.items():
+        for i, t in enumerate(tickers):
+            for j in range(i + 1, min(i + 3, len(tickers))):
+                add_link(t, tickers[j], "peer", 0.4)
+
+    # Also add edges in the old format for backwards compatibility
+    edges = [{"source": l["source"], "target": l["target"], "weight": l["value"], "type": l["type"]} for l in links]
+
+    unique_sectors = list(set(TICKER_SECTOR.values()))
+
+    return {
+        "nodes": nodes,
+        "links": links,
+        "edges": edges,
+        "signal_map": signal_map,
+        "sectors": unique_sectors,
+        "stats": {
+            "node_count": len(nodes),
+            "link_count": len(links),
+            "active_signals": len(signal_map),
+        },
+    }
 
 # ============ EVENT CASCADE TIMELINE ============
 @api_router.get("/market/timeline")
@@ -1464,11 +1664,13 @@ Signals:
             chat.with_model("gemini", "gemini-2.5-flash")
             brief_text = chat.send_message_sync(UserMessage(text=prompt))
         else:
-            import google.generativeai as genai
-            genai.configure(api_key=gemini_key)
-            model = genai.GenerativeModel('gemini-2.5-flash')
-            response = model.generate_content(prompt)
-            brief_text = response.text.strip()
+            from google import genai as _genai_brief
+            _brief_client = _genai_brief.Client(api_key=gemini_key)
+            _brief_response = _brief_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+            )
+            brief_text = _brief_response.text.strip()
 
         _brief_cache = {"text": brief_text, "timestamp": now, "signal_count": current_count}
         return {"brief": brief_text, "signal_count": len(signals), "cached": False}
@@ -1739,15 +1941,25 @@ async def startup_event():
         set_log_queue(log_queue)
         
         def _history_cb(run_id: str, entry: dict):
+            # Always append to raw buffer for Logs page pre-population
+            _LOG_BUFFER.append(entry)
             if run_id in recent_runs:
                 recent_runs[run_id]["entries"].append(entry)
                 if len(recent_runs[run_id]["entries"]) > 1000:
                     recent_runs[run_id]["entries"] = recent_runs[run_id]["entries"][-1000:]
-                    
+
         set_log_history_callback(_history_cb)
         logger.info("SSE log queue and history callback connected to pipeline")
     except Exception as e:
         logger.warning(f"Failed to connect SSE log queue and callback: {e}")
+
+    # Step 0b: Clean up stale Pending signals (confidence=0, older than 1h)
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        supabase.table("signals").delete().eq("signal", "Pending").eq("confidence", 0).lt("created_at", cutoff).execute()
+        logger.info("[STARTUP] Cleaned up stale Pending signals")
+    except Exception as e:
+        logger.warning(f"[STARTUP] Could not clean stale signals: {e}")
 
     # Step 1: Clean seed data
     await cleanup_seed_data()

@@ -413,6 +413,101 @@ export default function SignalDetailModal({ signal, onClose }) {
                     </div>
                 )}
 
+                {/* WHY IT MATTERS */}
+                {(signal.why_it_matters || signal.market_impact) && (
+                  <div style={{
+                    background:'var(--bg-card)',border:'1px solid var(--border-default)',
+                    borderRadius:8,padding:14,marginBottom:12
+                  }}>
+                    <div style={{fontSize:10,fontWeight:700,color:'var(--text-muted)',
+                      textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:10}}>
+                      WHY IT MATTERS
+                    </div>
+                    {signal.why_it_matters && (
+                      <p style={{fontSize:13,color:'var(--text-primary)',lineHeight:1.6,
+                        margin:0,borderLeft:'3px solid var(--accent-blue)',paddingLeft:10}}>
+                        {signal.why_it_matters}
+                      </p>
+                    )}
+                    {signal.market_impact && (
+                      <p style={{fontSize:12,color:'var(--text-secondary)',lineHeight:1.5,
+                        margin:'8px 0 0',paddingLeft:13}}>
+                        {signal.market_impact}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* CHAIN REACTIONS */}
+                {signal.chain_reactions?.length > 0 && (
+                  <div style={{
+                    background:'var(--bg-card)',border:'1px solid var(--border-default)',
+                    borderRadius:8,padding:14,marginBottom:12
+                  }}>
+                    <div style={{fontSize:10,fontWeight:700,color:'var(--text-muted)',
+                      textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:10}}>
+                      CHAIN REACTIONS
+                    </div>
+                    {signal.chain_reactions.map((reaction, i) => (
+                      <div key={i} style={{
+                        display:'flex',gap:10,marginBottom:8,paddingBottom:8,
+                        borderBottom: i < signal.chain_reactions.length-1
+                          ? '1px solid var(--border-default)' : 'none'
+                      }}>
+                        <div style={{fontSize:9,fontWeight:700,padding:'2px 6px',
+                          borderRadius:3,background:'var(--bg-hover)',color:'var(--text-muted)',
+                          whiteSpace:'nowrap',height:'fit-content',textTransform:'uppercase'}}>
+                          {reaction.layer}
+                        </div>
+                        <div style={{flex:1}}>
+                          <div style={{fontSize:12,color:'var(--text-primary)'}}>{reaction.effect}</div>
+                          <div style={{fontSize:10,color:'var(--text-muted)',marginTop:2,
+                            fontFamily:'monospace'}}>{reaction.timeframe}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* MARKET RIPPLE / RELATED ENTITIES */}
+                {signal.related_entities?.length > 0 && (
+                  <div style={{
+                    background:'var(--bg-card)',border:'1px solid var(--border-default)',
+                    borderRadius:8,padding:14,marginBottom:12
+                  }}>
+                    <div style={{fontSize:10,fontWeight:700,color:'var(--text-muted)',
+                      textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:10}}>
+                      MARKET RIPPLE
+                    </div>
+                    {signal.related_entities.slice(0,6).map((entity, i) => (
+                      <div key={i} style={{
+                        display:'flex',alignItems:'center',gap:10,padding:'6px 0',
+                        borderBottom: i < Math.min(signal.related_entities.length,6)-1
+                          ? '1px solid var(--border-default)' : 'none'
+                      }}>
+                        <span style={{fontSize:12,fontWeight:700,fontFamily:'monospace',
+                          color:'var(--text-primary)',width:44}}>{entity.ticker}</span>
+                        <span style={{
+                          fontSize:9,padding:'1px 5px',borderRadius:3,fontWeight:700,whiteSpace:'nowrap',
+                          background: entity.impact_direction === 'positive' ? 'var(--signal-positive-bg)'
+                            : entity.impact_direction === 'negative' ? 'var(--signal-risk-bg)' : 'var(--bg-hover)',
+                          color: entity.impact_direction === 'positive' ? 'var(--signal-positive)'
+                            : entity.impact_direction === 'negative' ? 'var(--signal-risk)' : 'var(--text-muted)',
+                        }}>
+                          {entity.impact_direction === 'positive' ? '\u2191 BENEFIT'
+                           : entity.impact_direction === 'negative' ? '\u2193 RISK' : '\u2192 WATCH'}
+                        </span>
+                        <span style={{fontSize:11,color:'var(--text-secondary)',flex:1,lineHeight:1.4}}>
+                          {entity.reason}
+                        </span>
+                        <span style={{fontSize:9,color:'var(--text-muted)',fontFamily:'monospace',whiteSpace:'nowrap'}}>
+                          {entity.relationship}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 {/* Accession number */}
                 {signal.accession_number && (
                     <div style={{ borderTop: "1px solid var(--border-default)", marginTop: "16px", paddingTop: "12px" }}>

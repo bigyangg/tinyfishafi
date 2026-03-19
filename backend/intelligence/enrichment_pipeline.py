@@ -37,9 +37,78 @@ Score 0 = perfectly consistent. Score 100 = direct, material contradiction.
 Score above 60 = alert-worthy. Score above 80 = CRITICAL."""
 
 
+async def _tinyfish_enrich_market_context(ticker: str, company: str) -> dict:
+    """
+    Use TinyFish to get live market context from Yahoo Finance.
+    This is a showcase of TinyFish for JS-rendered pages.
+    Runs in parallel with other enrichment agents.
+    """
+    import httpx
+    import json as _json
+    import os as _os
+
+    api_key = _os.environ.get("TINYFISH_API_KEY", "")
+    if not api_key or _os.environ.get("USE_TINYFISH", "true").lower() != "true":
+        return {}
+
+    url = f"https://finance.yahoo.com/quote/{ticker}"
+    goal = (
+        f'Return as JSON: {{"price": number, "change_pct": number, '
+        f'"volume": number, "market_cap": string, "analyst_rating": string}}\n'
+        f'Get current stock data for {ticker} from this page.'
+    )
+
+    try:
+        result_data = None
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            async with client.stream(
+                "POST",
+                "https://agent.tinyfish.ai/v1/automation/run-sse",
+                headers={
+                    "X-API-Key": api_key,
+                    "Content-Type": "application/json",
+                },
+                json={"url": url, "goal": goal},
+                timeout=25.0,
+            ) as resp:
+                if resp.status_code != 200:
+                    return {}
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    try:
+                        event = _json.loads(line[6:])
+                        if event.get("status") == "COMPLETED":
+                            result_data = event.get("resultJson") or event.get("result") or {}
+                            if isinstance(result_data, str):
+                                result_data = _json.loads(result_data)
+                            break
+                        if event.get("status") in ("FAILED", "REJECTED", "ERROR"):
+                            logger.warning(f"[TinyFish/market] {ticker}: {event.get('reason', 'rejected')}")
+                            return {}
+                    except Exception:
+                        continue
+
+        if result_data and isinstance(result_data, dict):
+            logger.info(f"[TinyFish/market] {ticker}: got market context")
+            return {
+                "tf_price": result_data.get("price"),
+                "tf_change_pct": result_data.get("change_pct"),
+                "tf_volume": result_data.get("volume"),
+                "tf_market_cap": result_data.get("market_cap"),
+                "tf_analyst_rating": result_data.get("analyst_rating"),
+            }
+    except asyncio.TimeoutError:
+        logger.info(f"[TinyFish/market] {ticker}: timeout — skipping")
+    except Exception as e:
+        logger.warning(f"[TinyFish/market] {ticker}: {str(e)[:80]}")
+
+    return {}
+
+
 async def run_enrichment_agents(ticker: str, accession_number: str, cik: str,
                                  company_name: str) -> dict:
-    """Fire all 7 enrichment agents simultaneously. Returns dict of all results."""
+    """Fire all 8 enrichment agents + TinyFish market context simultaneously."""
     from agents.edgar_filing_agent import EdgarFilingAgent
     from agents.news_agent import NewsAgent
     from agents.social_agent import SocialSentimentAgent
@@ -49,7 +118,7 @@ async def run_enrichment_agents(ticker: str, accession_number: str, cik: str,
     from agents.genome_agent import GenomeAgent
     from agents.options_agent import OptionsActivityAgent
 
-    logger.info(f"[ENRICHMENT] Firing 8 agents for {ticker}")
+    logger.info(f"[ENRICHMENT] Firing 8 agents + TinyFish market context for {ticker}")
 
     results = await asyncio.gather(
         EdgarFilingAgent().execute(accession_number=accession_number, cik=cik),
@@ -60,14 +129,21 @@ async def run_enrichment_agents(ticker: str, accession_number: str, cik: str,
         DivergenceDetectionAgent().execute(ticker=ticker, company_name=company_name),
         GenomeAgent().execute(ticker=ticker, cik=cik),
         OptionsActivityAgent().execute(ticker=ticker),
+        _tinyfish_enrich_market_context(ticker=ticker, company=company_name),
         return_exceptions=True,
     )
 
-    agent_names = ["edgar", "news", "social", "insider", "congress", "divergence", "genome", "options"]
+    agent_names = ["edgar", "news", "social", "insider", "congress", "divergence", "genome", "options", "tinyfish_market"]
     enrichment = {}
     for i, name in enumerate(agent_names):
         r = results[i]
         enrichment[name] = r if isinstance(r, dict) else {}
+
+    # Merge TinyFish market context into top-level enrichment dict
+    tf_market = enrichment.pop("tinyfish_market", {})
+    if tf_market:
+        enrichment["tinyfish_market"] = tf_market
+        logger.info(f"[ENRICHMENT] TinyFish market context for {ticker}: {list(tf_market.keys())}")
 
     logger.info(f"[ENRICHMENT] All agents complete for {ticker}")
     return enrichment
@@ -115,11 +191,14 @@ async def run_divergence_analysis(filing_text: str, public_statement: str) -> di
             chat.with_model("gemini", "gemini-2.5-flash")
             response_text = await chat.send_message(UserMessage(text=prompt))
         elif gemini_key and not gemini_key.startswith("your-"):
-            import google.generativeai as genai
-            genai.configure(api_key=gemini_key)
-            model = genai.GenerativeModel("gemini-2.5-flash")
-            response = model.generate_content(prompt)
-            response_text = response.text
+            from google import genai as _genai
+            from google.genai import types as _genai_types
+            _client = _genai.Client(api_key=gemini_key)
+            _response = _client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+            )
+            response_text = _response.text
         else:
             return {"divergence_score": 0, "severity": "LOW", "contradiction_found": False}
 
@@ -138,6 +217,57 @@ async def run_divergence_analysis(filing_text: str, public_statement: str) -> di
         return {"divergence_score": 0, "severity": "LOW", "contradiction_found": False}
 
 
+def compute_divergence_score(
+    filing_signal: str,
+    news_sentiment: str | None,
+    social_sentiment: str | None,
+    ticker: str,
+) -> dict:
+    """Compute divergence between filing signal and market sentiment.
+
+    Returns a dict with score (0-100), type string, and details string.
+    Pure synchronous — safe to call from _process_inner.
+    """
+    signal_map = {"Positive": 1, "Neutral": 0, "Risk": -1, "Pending": 0}
+    sentiment_map = {
+        "positive": 1, "bullish": 1,
+        "neutral": 0,
+        "bearish": -1, "negative": -1, "risk": -1,
+    }
+
+    filing_val = signal_map.get(filing_signal, 0)
+    news_val = sentiment_map.get((news_sentiment or "").lower(), 0)
+    social_val = sentiment_map.get((social_sentiment or "").lower(), 0)
+
+    score = 0
+    divergence_type = "NONE"
+    details = []
+
+    # News divergence (weighted heavier — 40 pts max)
+    if news_sentiment and filing_val != news_val:
+        diff = abs(filing_val - news_val)
+        score += diff * 40
+        if filing_val > news_val:
+            divergence_type = "BULLISH_FILING_BEARISH_NEWS" if filing_val > 0 else "NEUTRAL_FILING_BEARISH_NEWS"
+            details.append(f"Filing is {filing_signal} but news is {news_sentiment}")
+        else:
+            divergence_type = "BEARISH_FILING_BULLISH_NEWS" if filing_val < 0 else "NEUTRAL_FILING_BULLISH_NEWS"
+            details.append(f"Filing is {filing_signal} but news is {news_sentiment}")
+
+    # Social divergence (20 pts max)
+    if social_sentiment and filing_val != social_val:
+        diff = abs(filing_val - social_val)
+        score += diff * 20
+
+    score = min(100, score)
+
+    return {
+        "score": score,
+        "type": divergence_type if score > 20 else "NONE",
+        "details": "; ".join(details) if details else "No significant divergence",
+    }
+
+
 def build_enrichment_columns(enrichment: dict, divergence_data: dict) -> dict:
     """Convert agent results into flat columns for Supabase signals table."""
     news = enrichment.get("news", {})
@@ -146,6 +276,7 @@ def build_enrichment_columns(enrichment: dict, divergence_data: dict) -> dict:
     congress = enrichment.get("congress", {})
     genome = enrichment.get("genome", {})
     options_data = enrichment.get("options", {})
+    tf_market = enrichment.get("tinyfish_market", {})
 
     columns = {}
 
@@ -229,5 +360,15 @@ def build_enrichment_columns(enrichment: dict, divergence_data: dict) -> dict:
         pcr = options_data.get("put_call_ratio")
         if pcr is not None:
             columns["put_call_ratio"] = float(pcr)
+
+    # TinyFish market context (Yahoo Finance live data)
+    if tf_market:
+        columns["tf_market_context"] = json.dumps(tf_market)
+        if tf_market.get("tf_price") is not None:
+            columns["tf_price"] = tf_market["tf_price"]
+        if tf_market.get("tf_change_pct") is not None:
+            columns["tf_change_pct"] = tf_market["tf_change_pct"]
+        if tf_market.get("tf_analyst_rating"):
+            columns["tf_analyst_rating"] = tf_market["tf_analyst_rating"]
 
     return columns

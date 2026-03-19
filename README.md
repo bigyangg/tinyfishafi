@@ -1,6 +1,6 @@
 # AFI — Market Event Intelligence
 
-AFI is a real-time market event intelligence platform for active traders and finance researchers. It monitors SEC EDGAR continuously, detects new multi-form filings (8-K, 10-K, 10-Q, S-1, Form 4, SC 13D, DEF 14A, NT 10-K, NT 10-Q, 8-K/A, CORRESP) using dynamic poll intervals (45–300s by market hour), applies a rigorous 5-stage governance validation check, classifies market impact with structured Gemini JSON schema, orchestrates 8 concurrent enrichment agents, and delivers signals through a live Bloomberg/Linear-inspired dashboard with full dark/light theme support, per-user Telegram alerts, browser push notifications, and email digests. Failed filings are queued to a dead-letter table for automatic retry with exponential backoff.
+AFI is a real-time market event intelligence platform for active traders and finance researchers. It monitors SEC EDGAR continuously via the EDGAR Atom feed, detects new multi-form filings (8-K, 10-K, 10-Q, S-1, Form 4, SC 13D, DEF 14A, NT 10-K, NT 10-Q, 8-K/A, CORRESP) using dynamic poll intervals (45–300s by market hour), and extracts filing content using a **form-specific strategy**: direct HTTP for short forms (~1-2s), SEC XBRL structured APIs for annual/quarterly reports (~3s), and TinyFish for JS-rendered enrichment on Yahoo Finance. It applies 5-stage governance validation, classifies market impact with Gemini 2.5 Flash structured JSON schema, orchestrates **9 concurrent enrichment agents** (including TinyFish market context), scores divergence between filings and public sentiment, and delivers signals through a live Bloomberg-style dashboard with full dark/light theme support, per-user Telegram alerts, browser push notifications, and email digests. Failed filings are queued to a dead-letter table for automatic retry with exponential backoff.
 
 ---
 
@@ -12,9 +12,10 @@ AFI is a real-time market event intelligence platform for active traders and fin
 | Backend | FastAPI (Python 3.10+) |
 | Database | Supabase (PostgreSQL + Realtime) |
 | Authentication | Supabase Auth (Email/Password, JWT) |
-| AI Classification | Google Gemini 2.5 Flash (via `google.genai` SDK) |
-| Web Scraping | TinyFish Web Agent API (SSE streaming) |
-| Enrichment | 8 concurrent agents (`asyncio.gather`) |
+| AI Classification | Google Gemini 2.5 Flash (via `google-genai` SDK v1.65+, model chain fallback, 503 retry) |
+| Web Scraping | TinyFish Web Agent API (SSE streaming, Yahoo Finance enrichment) |
+| Filing Extraction | Form-specific strategy: HTTP direct / SEC XBRL API / TinyFish |
+| Enrichment | 9 concurrent agents (`asyncio.gather`) including TinyFish market context |
 | Live Data Streaming | Server-Sent Events (SSE) |
 | Alerts | Telegram Bot API (global + per-user), Browser Push Notifications |
 | Email | Resend (optional, for daily digests) |
@@ -155,7 +156,7 @@ tinyfishafi/
     edgar_agent.py           # EDGAR multi-form polling agent (11 form types); dynamic poll intervals; content hash dedup; 3-step CIK→ticker fallback
     signal_pipeline.py       # Core orchestrator: classify -> govern -> enrich -> score -> store; dead-letter queue on failure
     intelligence/            # Enrichment pipeline module
-      enrichment_pipeline.py # Orchestration: 7 agents + Gemini divergence analysis + column mapping
+      enrichment_pipeline.py # Orchestration: 9 agents (8 domain + TinyFish market context) via asyncio.gather + divergence analysis + column mapping
       genome_engine.py       # Genome backfill logic for Tier 1 companies
     agents/                  # Agent Infrastructure
       base_agent.py          # Base class: timeout, retry, graceful failure, USE_TINYFISH guard
@@ -175,7 +176,7 @@ tinyfishafi/
       form_sc13d.py          # SC 13D activist filing processor
       form_s1.py             # S-1 IPO registration processor
       form_nt.py             # NT 10-K / NT 10-Q late-filing processor (always Risk; severity flags)
-      gemini_helper.py       # call_gemini_with_retry() with 3-attempt exponential backoff on quota errors
+      gemini_helper.py       # classify_sync() / call_gemini() / call_gemini_async() — google-genai SDK, thread-safe singleton, 503 retry, 2048 token limit
     governance.py            # 5-check validation layer (confidence, news, facts, consistency, junk)
     event_classifier.py      # Deterministic taxonomy mapper (8-K item extraction)
     market_data.py           # Yahoo Finance wrapper with 5-min TTL cache
@@ -237,11 +238,11 @@ tinyfishafi/
 The pipeline (`signal_pipeline.py`) processes filings through a chain of enrichment steps:
 
 0. **Dedup** — SHA-256 content hash of first 5,000 chars checked against `signals.content_hash` before processing
-1. **Classify** — Structured Gemini JSON schema (`response_mime_type="application/json"`) eliminates parse errors; Emergent API fallback; chain-of-thought reasoning
+1. **Classify** — Structured Gemini JSON schema (`response_mime_type="application/json"`, `max_output_tokens=2048`). Model chain: `gemini-2.5-flash` → `gemini-2.5-flash-lite` → `gemini-2.0-flash`. 503/overload retry with 3s/6s/9s wait. conf:0 results dropped (not stored).
 2. **Taxonomy** — Deterministic event mapping (EARNINGS_BEAT, EXEC_DEPARTURE, INSIDER_BUY, IPO_REGISTRATION, etc.)
 3. **Govern** — 5-check validation: confidence floor, news divergence, key facts, event consistency, junk filter
-4. **Enrich** — 8 Agents (edgar, news, social, insider, congress, divergence, genome, options) fire simultaneously via `asyncio.gather`
-5. **Diverge** — Compares filing sentiment against public sentiment using Gemini (SAID vs FILED analysis)
+4. **Diverge** — Computes divergence score (0-100) comparing filing signal vs news/social sentiment. Positive filing + negative news = `POSITIVE_FILING_NEGATIVE_NEWS`. Stores score, type, and contradiction summary.
+5. **Enrich** — 9 Agents (edgar, news, social, insider, congress, divergence, genome, options, tinyfish_market) fire simultaneously via `asyncio.gather`
 6. **Score** — Composite impact score (0-100): confidence + event weight + sentiment + watchlist + governance penalty; short interest and options sentiment factored in
 7. **Store** — Enriched signal saved to Supabase with 34+ columns and full audit trail
 8. **Track** — Price checks scheduled at T+1h, T+24h, T+3d
@@ -259,7 +260,10 @@ The agent (`edgar_agent.py`) runs autonomously with **dynamic poll intervals** �
 2. Queries SEC EDGAR EFTS for new filings (8-K, 10-K, 10-Q, S-1, Form 4, SC 13D, DEF 14A, NT 10-K, NT 10-Q, 8-K/A, CORRESP) filed today
 3. **Resolves tickers from CIK** via 3-step fallback: SEC JSON → yfinance Search → `UNKNOWN__<CIK>`
 4. Deduplicates against `accession_number` and `content_hash` (SHA-256 of first 5,000 chars)
-5. Extracts document text via **3-step fallback chain**: TinyFish → SEC EFTS full-text → HTTP scrape (with `follow_redirects`)
+5. Extracts document text via **form-specific strategy** (`EXTRACTION_STRATEGY` dict):
+   - **Short forms** (8-K, 4, SC 13D, S-1, DEF 14A, NT): direct HTTP scrape (~1-2s)
+   - **10-K / 10-K/A**: SEC XBRL Company Facts API + Submissions API (~3s, returns structured `$39.3B Revenue`, `$3.23 EPS` data)
+   - **10-Q / 10-Q/A**: SEC XBRL API then HTTP fallback
 6. Routes to the correct form-specific processor via registry pattern
 7. Delegates to `SignalPipeline.process()` for full classification + enrichment
 8. Dispatches Telegram alerts via `dispatch_signal_alert()` using smart thresholds (watchlist tickers always, confidence ≥ 60 for Positive/Risk, impact ≥ 55)
@@ -275,11 +279,11 @@ Each filing type has a dedicated processor with structured Gemini JSON schema:
 - **FormS1Processor** — IPO registration, S-1 financials, underwriter analysis, lock-up periods, risk assessment
 - **FormNTProcessor** — NT 10-K / NT 10-Q late-filing notifications; always Risk; extracts severity flags (restatement, going concern, SEC investigation, material weakness)
 
-If the Gemini API key is missing or invalid, filings are stored as "Pending" with confidence 0. The agent never crashes on individual filing failures.
+If Gemini fails completely (conf:0), the filing is dropped from the signal feed and written to `failed_filings` for automatic retry. The agent never crashes on individual filing failures.
 
 ### Intelligence Agents
 
-AFI deploys 8 specialized enrichment agents that run concurrently via `asyncio.gather`:
+AFI deploys **9 specialized enrichment agents** that run concurrently via `asyncio.gather`:
 
 | Agent | Source | Output |
 |-------|--------|--------|
@@ -291,11 +295,13 @@ AFI deploys 8 specialized enrichment agents that run concurrently via `asyncio.g
 | **DivergenceDetectionAgent** | Press releases | Key claims for SAID vs FILED analysis |
 | **GenomeAgent** | EDGAR filing history | Filing patterns, amendment ratios, genome score/trend/alert |
 | **OptionsActivityAgent** | Yahoo Finance options chain | Put/call ratio, unusual volume (>3× open interest), options sentiment |
+| **TinyFish Market Context** | Yahoo Finance (JS-rendered) | Live price, change%, volume, market cap, analyst rating |
+
+The TinyFish Market Context agent (`_tinyfish_enrich_market_context`) is a dedicated showcase of TinyFish's ability to extract data from JavaScript-rendered pages. Yahoo Finance requires a real browser agent — unlike static SEC filings — making it the ideal TinyFish use case. Results stored as `tf_price`, `tf_change_pct`, `tf_volume`, `tf_market_cap`, `tf_analyst_rating`.
 
 All agents:
 - Respect the `USE_TINYFISH` environment variable — skip cleanly when disabled
 - Have a 12-second timeout with graceful failure (return `{}` on error)
-- Stream progress via TinyFish SSE
 - Never crash the pipeline — individual agent failures are logged and skipped
 
 ### Notification Architecture
@@ -328,9 +334,9 @@ Each channel works independently — disabling one does not affect the others:
 ### Divergence Leaderboard
 
 The `/api/leaderboard/divergence` endpoint returns companies ranked by their divergence score — a measure of the gap between what the CEO says publicly and what the SEC filing reveals. The leaderboard:
-- Queries all signals with `divergence_score > 0`
-- Deduplicates by ticker, keeping the highest score per company
+- Queries all signals with `divergence_score > 0`, deduplicates by ticker keeping highest score
 - Returns sorted results with severity levels (LOW, MEDIUM, HIGH, CRITICAL)
+- Falls back to top signals ordered by `impact_score DESC` when no divergence data exists yet
 
 ### Real-Time Dashboard
 
@@ -734,3 +740,23 @@ Test suites:
 - **"God's View" Correlation Network** (`Graph.jsx` + `/api/correlations/graph`): 2D force-directed graph mapping macro dependencies across 10 sectors. Features pulsing nodes for active signals, directional particles for supply chains, and interactive signal badges.
 - **Market Pulse** (`MarketPulse.jsx` + `/api/market/pulse`): 0-100 real-time market stress index indicator powered by cross-signal analysis, rendered in the global top navigation.
 - **Sector Ripple Drawer** (`RippleDrawer.jsx` + `/api/signals/{id}/ripple`): Collapsible UI inside signal cards that enumerates affected customers, suppliers, and peers with live price feeds and directional impact.
+
+### Phase 12: Pipeline Reliability & SDK Hardening ✅
+- **google-genai SDK**: Fully migrated to `google-genai` v1.65+ (`from google import genai`). `google-generativeai` removed.
+- **Gemini model chain**: `gemini-2.5-flash` → `gemini-2.5-flash-lite` → `gemini-2.0-flash` → `gemini-2.0-flash-lite`. 503/overload handled with 3s/6s/9s tiered retry. `max_output_tokens` raised to 2048 to prevent JSON truncation.
+- **conf:0 Pending dropped**: Zero-confidence classification failures are no longer stored — they go to the dead-letter queue. Feed only shows real signals.
+- **Junk filter**: Real tickers (`^[A-Z]{1,5}$`) always pass. Only unresolved `UNKNOWN__<CIK>` placeholders with trivially short keyword-analysis summaries are discarded.
+- **Leaderboard fix**: Removed non-existent `classification` column from Supabase query. Fallback now uses `impact_score DESC` when no divergence data exists.
+- **DB migration**: `content_hash`, `failed_filings` table, and all enrichment columns added. Indexes on `content_hash` and `divergence_score`.
+- **TinyFish batch timeouts**: 10-K/S-1 increased to 120s, 10-Q to 90s. Default max wait 120s.
+
+### Phase 11: TinyFish Hackathon Sprint ✅
+- **Form-specific extraction strategy**: `EXTRACTION_STRATEGY` dict routes each form type to the optimal method. Static HTML forms (8-K, 4, SC 13D, S-1, DEF 14A, NT) use direct HTTP (~1-2s). Annual reports (10-K) use SEC XBRL Company Facts API + Submissions API (~3s, returning structured `$637B Revenue`, `$3.23 EPS` data). Eliminates 685-second TinyFish timeout on 200+ page documents.
+- **TinyFish as enrichment showcase**: `_tinyfish_enrich_market_context()` runs as the 9th agent in `asyncio.gather`. Fetches Yahoo Finance (JS-rendered — real TinyFish use case) for live price, volume, market cap, and analyst rating in parallel with all other agents. Stored as `tf_*` enrichment columns.
+- **Bloomberg 3-panel Graph**: `Graph.jsx` rebuilt as `220px | 1fr | 260px` grid. Left: sector list with live counts + active signals list. Center: force graph with stat bar + link type filter pills. Right: selected company detail with latest signal, correlation peers with type badges, and TRIGGER SWEEP button.
+- **EDGAR Atom feed polling**: Primary polling source switched from broken EFTS wildcard (`q=*` returns 0 results) to EDGAR Atom feed (`/cgi-bin/browse-edgar?output=atom`). New `_parse_atom_feed()` handles Atom namespace correctly with regex fallback. Returns 10+ entries per form type.
+- **EFTS query fix**: No-q format (`forms=8-K&dateRange=custom&startdt=...`) confirmed returning 100+ results as secondary source.
+- **Gemini model stabilized**: All files use `google.genai` SDK (deprecated `google.generativeai` removed). Model pinned to `gemini-2.5-flash` (confirmed working on standard API keys). Fallback chain: `gemini-1.5-flash` → `gemini-1.5-flash-8b`. 404 responses automatically rotate to next model.
+- **Divergence scoring**: `signal_pipeline.py` computes divergence after enrichment (Positive filing + negative news = `POSITIVE_FILING_NEGATIVE_NEWS`, scored 40-85). Powers the Divergence Leaderboard.
+- **Pipeline status endpoint**: `GET /api/pipeline/status` — `signals_24h`, `good_signals_24h`, `avg_confidence`, `edgar_running`, `status`.
+- **Startup cleanup**: Deletes stale Pending/confidence-0 signals older than 1 hour on boot.

@@ -32,27 +32,34 @@ export default function Logs() {
 
     // Fetch historical runs on mount
     useEffect(() => {
+        const urlParams = new URLSearchParams(window.location.search);
+        const targetRunId = urlParams.get('run');
+
         fetch(`${API}/logs/history`)
             .then(res => res.json())
             .then(data => {
-                if (data.runs && Array.isArray(data.runs)) {
-                    setRuns(prev => {
-                        const next = new Map(prev);
-                        data.runs.forEach(r => next.set(r.id, r));
-                        return next;
-                    });
-                    // Auto-select the requested run from URL, or fallback to newest completed
-                    const urlParams = new URLSearchParams(window.location.search);
-                    const targetRunId = urlParams.get('run');
-
+                if (data.runs && Array.isArray(data.runs) && data.runs.length > 0) {
+                    const next = new Map();
+                    data.runs.forEach(r => next.set(r.id, r));
+                    setRuns(next);
                     if (targetRunId && next.has(targetRunId)) {
                         latestRunId.current = targetRunId;
                         setSelectedRunId(targetRunId);
-                    } else if (data.runs.length > 0) {
+                    } else {
                         const sorted = [...data.runs].sort((a, b) => b.startTime > a.startTime ? 1 : -1);
                         latestRunId.current = sorted[0].id;
-                        setSelectedRunId(prev => prev === null ? sorted[0].id : prev);
+                        setSelectedRunId(sorted[0].id);
                     }
+                } else {
+                    // Fallback: pre-populate orphan entries from raw log buffer
+                    fetch(`${API}/logs/history-raw`)
+                        .then(r => r.ok ? r.json() : [])
+                        .then(entries => {
+                            if (Array.isArray(entries) && entries.length > 0) {
+                                setOrphanEntries(entries.slice(-400));
+                            }
+                        })
+                        .catch(() => {});
                 }
             })
             .catch(err => console.error("Failed to fetch log history:", err));

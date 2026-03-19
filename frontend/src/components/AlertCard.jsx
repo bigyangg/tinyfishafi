@@ -236,6 +236,78 @@ function AlertCard({ signal, isWatched, onToggleWatch, onClick, isNew, dimmed })
         </div>
       )}
 
+      {/* CATEGORY BADGES */}
+      {signal.category_primary && (
+        <div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:4,marginBottom:4}}>
+          <span style={{
+            fontSize:9,fontWeight:700,padding:'2px 6px',
+            borderRadius:3,background:'var(--accent-blue-bg)',
+            color:'var(--accent-blue)',border:'1px solid var(--accent-blue-border)'
+          }}>
+            {signal.category_primary}
+          </span>
+          {(signal.category_secondary || []).slice(0,2).map(cat => (
+            <span key={cat} style={{
+              fontSize:9,padding:'2px 6px',borderRadius:3,
+              background:'var(--bg-hover)',color:'var(--text-tertiary)',
+              border:'1px solid var(--border-default)'
+            }}>
+              {cat}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* WHY IT MATTERS */}
+      {signal.why_it_matters && (
+        <div style={{
+          fontSize:11,color:'var(--text-secondary)',
+          marginTop:4,marginBottom:4,lineHeight:1.4,
+          borderLeft:'2px solid var(--accent-blue)',
+          paddingLeft:7,fontStyle:'italic'
+        }}>
+          {signal.why_it_matters}
+        </div>
+      )}
+
+      {/* CHAIN REACTION PREVIEW */}
+      {signal.chain_reactions?.length > 0 && (
+        <div style={{
+          marginTop:4,marginBottom:4,fontSize:10,color:'var(--text-muted)',
+          display:'flex',alignItems:'center',gap:4
+        }}>
+          <span>&#x21AA;</span>
+          <span>{signal.chain_reactions[0]?.effect}</span>
+        </div>
+      )}
+
+      {/* RELATED ENTITIES PILLS */}
+      {signal.related_entities?.length > 0 && (
+        <div style={{display:'flex',gap:4,marginTop:4,marginBottom:4,flexWrap:'wrap'}}>
+          {signal.related_entities.slice(0,4).map(entity => (
+            <span key={entity.ticker} style={{
+              fontSize:9,padding:'1px 6px',borderRadius:3,
+              fontFamily:'monospace',fontWeight:700,
+              background: entity.impact_direction === 'positive'
+                ? 'var(--signal-positive-bg)'
+                : entity.impact_direction === 'negative'
+                  ? 'var(--signal-risk-bg)'
+                  : 'var(--bg-card)',
+              color: entity.impact_direction === 'positive'
+                ? 'var(--signal-positive)'
+                : entity.impact_direction === 'negative'
+                  ? 'var(--signal-risk)'
+                  : 'var(--text-muted)',
+              border:'1px solid var(--border-default)'
+            }}>
+              {entity.impact_direction === 'positive' ? '\u2191' :
+               entity.impact_direction === 'negative' ? '\u2193' : '\u2192'}{' '}
+              {entity.ticker}
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* NEWS ROW */}
       {signal.news_headlines && signal.news_headlines.length > 0 && (
         <div style={{ fontSize: '10px', color: 'var(--text-tertiary)', marginBottom: '6px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

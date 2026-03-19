@@ -28,7 +28,10 @@ export default function Leaderboard() {
   const fetchData = useCallback(async () => {
     try {
       const res = await axios.get(`${API}/leaderboard/divergence`);
-      setData(res.data.leaderboard || []);
+      const items = Array.isArray(res.data)
+        ? res.data
+        : (res.data.results || res.data.leaderboard || res.data.data || []);
+      setData(items);
       setLastRefresh(new Date());
     } catch (err) {
       console.error('Leaderboard fetch failed:', err);

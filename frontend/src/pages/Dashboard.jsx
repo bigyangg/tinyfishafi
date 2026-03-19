@@ -9,7 +9,7 @@ import SignalDetailModal from '../components/SignalDetailModal';
 import { SignalSkeleton, StatsSkeleton, WatchlistSkeleton } from '../components/SignalSkeleton';
 import { usePushNotifications } from '../hooks/usePushNotifications';
 import BriefView from '../components/views/BriefView';
-import RadarView from '../components/views/RadarView';
+import Radar from './Radar';
 import IntelView from '../components/views/IntelView';
 import AlertsView from '../components/views/AlertsView';
 
@@ -1076,7 +1076,7 @@ export default function Dashboard() {
 
       {/* VIEW CONTENT */}
       {activeView === 'BRIEF' && <BriefView authHeaders={authHeaders} />}
-      {activeView === 'RADAR' && <RadarView />}
+      {activeView === 'RADAR' && <Radar />}
       {activeView === 'INTEL' && <IntelView watchlist={watchlist} />}
       {activeView === 'ALERTS' && <AlertsView />}
 

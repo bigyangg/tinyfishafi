@@ -1,7 +1,7 @@
 // AppShell.jsx — Shared layout shell for all private pages
 // Provides sidebar nav with Signal Trigger + top status bar
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useAppData } from '../context/AppDataContext';
 import { supabase } from '../lib/supabase';
@@ -14,6 +14,36 @@ if (typeof window !== 'undefined' && localStorage.getItem('afi_theme') === 'ligh
 }
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+
+function PageWrapper({ children }) {
+    const location = useLocation();
+    const [opacity, setOpacity] = useState(1);
+    const prevPath = useRef(location.pathname);
+
+    useEffect(() => {
+        if (location.pathname !== prevPath.current) {
+            setOpacity(0);
+            const t = setTimeout(() => {
+                prevPath.current = location.pathname;
+                setOpacity(1);
+            }, 60);
+            return () => clearTimeout(t);
+        }
+    }, [location.pathname]);
+
+    return (
+        <div style={{
+            gridRow: '2',
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
+            opacity,
+            transition: 'opacity 150ms ease',
+        }}>
+            {children}
+        </div>
+    );
+}
 
 export default function AppShell({ children }) {
     const { user, authHeaders, logout } = useAuth();
@@ -436,14 +466,9 @@ export default function AppShell({ children }) {
             </div>
 
             {/* ── MAIN CONTENT ── */}
-            <div style={{
-                gridRow: '2',
-                overflow: 'hidden',
-                display: 'flex',
-                flexDirection: 'column',
-            }}>
+            <PageWrapper>
                 {children}
-            </div>
+            </PageWrapper>
 
         </div>
     );

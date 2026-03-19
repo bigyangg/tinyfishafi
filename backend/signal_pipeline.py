@@ -145,6 +145,8 @@ class ProcessedSignal:
     news_headlines: Optional[list] = None
     news_sentiment: Optional[str] = None
     divergence_type: Optional[str] = None
+    divergence_score: Optional[int] = None
+    divergence_details: Optional[str] = None
     extraction_source: Optional[str] = None
     extraction_time_ms: Optional[int] = None
     run_id: Optional[str] = None
@@ -152,6 +154,16 @@ class ProcessedSignal:
     # Short interest enrichment
     short_percent_float: Optional[float] = None
     days_to_cover: Optional[float] = None
+    # Correlation + category enrichment
+    why_it_matters: Optional[str] = None
+    market_impact: Optional[str] = None
+    category_primary: Optional[str] = None
+    category_secondary: Optional[list] = None
+    tags: Optional[list] = None
+    correlations: Optional[dict] = None
+    related_entities: Optional[list] = None
+    chain_reactions: Optional[list] = None
+    sector: Optional[str] = None
 
 
 class FilingProcessor(ABC):
@@ -249,6 +261,32 @@ class SignalPipeline:
         except Exception as e:
             logger.error(f"[PIPELINE] Failed to register 8-K/A processor: {e}")
 
+    def _is_junk_signal(self, result: dict, filing_text: str) -> bool:
+        """Only discard truly empty/worthless signals.
+
+        NEVER discard signals from real company tickers (1-5 uppercase letters).
+        Only discard UNKNOWN__ CIK placeholders with truly empty content.
+        """
+        import re
+        ticker = result.get("ticker", "")
+        confidence = result.get("confidence", 0)
+        summary = result.get("summary", "")
+
+        # Real ticker = 1-5 uppercase letters — keep it unconditionally
+        if re.match(r'^[A-Z]{1,5}$', ticker or ""):
+            return False
+
+        # UNKNOWN__ CIK placeholder: discard only if keyword analysis and trivially empty
+        if "UNKNOWN__" in (ticker or ""):
+            return (
+                confidence <= 55
+                and "keyword analysis" in summary.lower()
+                and len(summary) < 80
+            )
+
+        # Keep everything else (e.g. UNKNOWN without CIK suffix — borderline, keep)
+        return False
+
     def register_processor(self, filing_type: str, processor: FilingProcessor):
         """Register a filing processor for a specific filing type."""
         self._processors[filing_type] = processor
@@ -340,22 +378,20 @@ class SignalPipeline:
         
         pipeline_log("GEMINI", f"Signal: {classification.get('signal')}, conf: {classification.get('confidence')}", "success")
         
-        if classification.get("signal") == "Pending":
-            # Store as-is without enrichment
-            return ProcessedSignal(
-                ticker=classification["ticker"],
-                company=classification["company"],
-                filing_type=filing_type,
-                signal="Pending",
-                confidence=0,
-                summary=classification["summary"],
-                accession_number=filing.accession_number,
-                filed_at=filing.filed_at,
-                config_version=self._config_version,
+        if classification.get("signal") == "Pending" or classification.get("confidence", 0) == 0:
+            # conf:0 means complete classification failure — don't pollute the feed
+            logger.warning(
+                f"[PIPELINE] Dropping conf:0 Pending signal for {filing.accession_number} "
+                f"({filing_type}) — will retry via dead-letter queue"
             )
+            return None
             
         if not is_valid_signal(classification.get("ticker", ""), classification.get("summary", "")):
-            logger.warning(f"[PIPELINE] Discarding junk signal: {classification.get('summary', '')[:60]}")
+            logger.warning(f"[PIPELINE] Discarding junk signal (pattern match): {classification.get('summary', '')[:60]}")
+            return None
+
+        if self._is_junk_signal(classification, filing.filing_text or ""):
+            logger.warning(f"[PIPELINE] Discarding junk signal (low quality): conf={classification.get('confidence', 0)}, summary={classification.get('summary', '')[:60]}")
             return None
         
         # Extract chain of thought + key facts from classification
@@ -514,6 +550,63 @@ class SignalPipeline:
             logger.warning(f"[PIPELINE] Impact scoring failed (continuing): {e}")
             pipeline_log("SCORING", f"Scoring failed: {e}", "warning")
         
+        # Step 7b: Correlation + category enrichment
+        stage_ref[0] = "correlation"
+        correlations = {}
+        related_entities = []
+        chain_reactions = []
+        sector = None
+        category_primary = None
+        category_secondary = []
+        tags = []
+        why_it_matters_text = classification.get("why_it_matters", "")
+        market_impact_text = classification.get("market_impact", "")
+        try:
+            from intelligence.correlation_engine import build_correlations
+            correlations = build_correlations(
+                signal={"ticker": ticker, "event_type": event.event_type, "signal": event.signal},
+                enrichment_data={"news_dominant_theme": news_sentiment_label or ""},
+            )
+            related_entities = correlations.get("related_entities", [])
+            chain_reactions = correlations.get("chain_reactions", [])
+            sector = correlations.get("sector")
+            pipeline_log("CORRELATIONS", f"Related entities: {len(related_entities)}, chain reactions: {len(chain_reactions)}", "success")
+        except Exception as e:
+            logger.warning(f"[PIPELINE] Correlation engine failed (continuing): {e}")
+
+        try:
+            from intelligence.category_mapper import map_categories, generate_why_it_matters
+            cats = map_categories(ticker, event.event_type)
+            category_primary = cats["primary"]
+            category_secondary = cats["secondary"]
+            tags = cats["tags"]
+            if not why_it_matters_text:
+                why_it_matters_text = generate_why_it_matters(ticker, event.event_type)
+            pipeline_log("CATEGORIES", f"{category_primary} → {category_secondary[:2]}", "success")
+        except Exception as e:
+            logger.warning(f"[PIPELINE] Category mapping failed (continuing): {e}")
+
+        # Step 7c: Compute divergence score from filing signal vs news/social sentiment
+        stage_ref[0] = "divergence_score"
+        divergence_score_val = None
+        divergence_details_val = None
+        try:
+            from intelligence.enrichment_pipeline import compute_divergence_score
+            div_result = compute_divergence_score(
+                filing_signal=event.signal,
+                news_sentiment=news_sentiment_label,
+                social_sentiment=None,  # social enrichment not available in sync pipeline
+                ticker=ticker,
+            )
+            if div_result and div_result.get("score", 0) > 0:
+                divergence_score_val = div_result.get("score")
+                # Override divergence_type only if not already set by governance
+                if not divergence_type:
+                    divergence_type = div_result.get("type", "NONE")
+                divergence_details_val = div_result.get("details", "")
+        except Exception as e:
+            logger.warning(f"[PIPELINE] Divergence compute failed (continuing): {e}")
+
         # Build final signal
         stage_ref[0] = "build_signal"
         total_time = round(time.time() - pipeline_start, 1)
@@ -544,9 +637,20 @@ class SignalPipeline:
             news_headlines=news_headlines if news_headlines else None,
             news_sentiment=news_sentiment_label,
             divergence_type=divergence_type,
+            divergence_score=divergence_score_val,
+            divergence_details=divergence_details_val,
             run_id=run_id,
             short_percent_float=short_interest_data.get('short_percent_float') if short_interest_data else None,
             days_to_cover=short_interest_data.get('short_ratio') if short_interest_data else None,
+            why_it_matters=why_it_matters_text,
+            market_impact=market_impact_text,
+            category_primary=category_primary,
+            category_secondary=category_secondary,
+            tags=tags,
+            correlations=correlations,
+            related_entities=related_entities,
+            chain_reactions=chain_reactions,
+            sector=sector,
         )
         
         pipeline_log("STORE", f"Signal saved to Supabase", "success", run_id=run_id)
@@ -600,6 +704,10 @@ class SignalPipeline:
             row["news_sentiment"] = signal.news_sentiment
         if signal.divergence_type is not None:
             row["divergence_type"] = signal.divergence_type
+        if signal.divergence_score is not None:
+            row["divergence_score"] = signal.divergence_score
+        if signal.divergence_details is not None:
+            row["divergence_details"] = signal.divergence_details
         if signal.extraction_source is not None:
             row["extraction_source"] = signal.extraction_source
         if signal.extraction_time_ms is not None:
@@ -616,4 +724,22 @@ class SignalPipeline:
             row["short_percent_float"] = signal.short_percent_float
         if signal.days_to_cover is not None:
             row["days_to_cover"] = signal.days_to_cover
+        if signal.why_it_matters is not None:
+            row["why_it_matters"] = signal.why_it_matters
+        if signal.market_impact is not None:
+            row["market_impact"] = signal.market_impact
+        if signal.category_primary is not None:
+            row["category_primary"] = signal.category_primary
+        if signal.category_secondary is not None:
+            row["category_secondary"] = json.dumps(signal.category_secondary)
+        if signal.tags is not None:
+            row["tags"] = json.dumps(signal.tags)
+        if signal.correlations is not None:
+            row["correlations"] = json.dumps(signal.correlations)
+        if signal.related_entities is not None:
+            row["related_entities"] = json.dumps(signal.related_entities)
+        if signal.chain_reactions is not None:
+            row["chain_reactions"] = json.dumps(signal.chain_reactions)
+        if signal.sector is not None:
+            row["sector"] = signal.sector
         return row

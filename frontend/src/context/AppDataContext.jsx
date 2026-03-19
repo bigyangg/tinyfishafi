@@ -3,6 +3,22 @@ import { supabase } from '../lib/supabase';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8001';
 
+// ── Request deduplication cache (module-level, survives nav) ───────────────
+const REQUEST_CACHE = new Map();
+
+async function cachedFetch(url, ttlMs = 60000) {
+  const now = Date.now();
+  const cached = REQUEST_CACHE.get(url);
+  if (cached && (now - cached.ts) < ttlMs) {
+    return cached.data;
+  }
+  const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const data = await r.json();
+  REQUEST_CACHE.set(url, { data, ts: now });
+  return data;
+}
+
 const AppDataContext = createContext(null);
 
 export function AppDataProvider({ children }) {
@@ -59,6 +75,7 @@ export function AppDataProvider({ children }) {
   // Backend health check (every 30s) with failure counter to avoid flashing offline
   useEffect(() => {
     const checkHealth = () => {
+      // Health check skips cache (always fresh)
       fetch(`${BACKEND_URL}/api/health`, { signal: AbortSignal.timeout(5000) })
         .then(r => {
           if (r.ok) {
@@ -68,7 +85,6 @@ export function AppDataProvider({ children }) {
         })
         .catch(() => {
           healthFailureCountRef.current += 1;
-          // Only mark offline after 2 consecutive failures
           if (healthFailureCountRef.current >= 2) {
             setBackendOnline(false);
           }
@@ -79,11 +95,10 @@ export function AppDataProvider({ children }) {
     return () => clearInterval(interval);
   }, []);
 
-  // Agent status polling (every 20s) with localStorage cache
+  // Agent status polling (every 20s) with 10s request cache
   useEffect(() => {
     const fetchAgentStatus = () => {
-      fetch(`${BACKEND_URL}/api/edgar/status`)
-        .then(r => r.ok ? r.json() : null)
+      cachedFetch(`${BACKEND_URL}/api/edgar/status`, 10000)
         .then(data => {
           if (data) {
             const status = data.agent_status || 'stopped';
@@ -104,10 +119,9 @@ export function AppDataProvider({ children }) {
 
   // Staggered initial fetch
   useEffect(() => {
-    // Fetch market pulse after 300ms
+    // Market pulse — 30s cache
     setTimeout(() => {
-      fetch(`${BACKEND_URL}/api/market/pulse`)
-        .then(r => r.ok ? r.json() : null)
+      cachedFetch(`${BACKEND_URL}/api/market/pulse`, 30000)
         .then(data => { if (data) setMarketPulse(data); })
         .catch(() => {});
     }, 300);
@@ -121,16 +135,13 @@ export function AppDataProvider({ children }) {
     })();
 
     if (cachedSignals.length === 0 || cacheAge > 300000) {
-      fetch(`${BACKEND_URL}/api/signals`)
-        .then(r => r.ok ? r.json() : [])
+      // Signals — 3 min cache
+      cachedFetch(`${BACKEND_URL}/api/signals`, 180000)
         .then(data => {
-          if (Array.isArray(data)) {
-            setSignals(data);
-            localStorage.setItem('afi_signals_cache', JSON.stringify(data));
-            localStorage.setItem('afi_signals_timestamp', Date.now().toString());
-          } else if (data && Array.isArray(data.signals)) {
-            setSignals(data.signals);
-            localStorage.setItem('afi_signals_cache', JSON.stringify(data.signals));
+          const sigs = Array.isArray(data) ? data : (data?.signals || []);
+          if (sigs.length > 0) {
+            setSignals(sigs);
+            localStorage.setItem('afi_signals_cache', JSON.stringify(sigs));
             localStorage.setItem('afi_signals_timestamp', Date.now().toString());
           }
         })

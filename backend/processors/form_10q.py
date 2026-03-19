@@ -75,8 +75,32 @@ Additionally, extract these financial metrics as numbers (use null if not presen
             }
 
         try:
-            text = filing.filing_text[:15000] if filing.filing_text else f"10-Q quarterly report by {filing.company_name}"
-            prompt = f"{self.SYSTEM_PROMPT}\n\nAnalyze this SEC 10-Q quarterly report:\n\n{text}"
+            text = filing.filing_text[:10000] if filing.filing_text else f"10-Q quarterly report by {filing.company_name}"
+
+            # Detect structured XBRL data from SEC API extraction strategy
+            is_structured = (
+                "[sec_facts_api]" in text[:200]
+                or "Source: SEC EDGAR XBRL" in text[:400]
+                or "Total Revenue:" in text[:600]
+                or "Net Income:" in text[:600]
+            )
+
+            if is_structured:
+                prompt = (
+                    f"You are analyzing structured financial data extracted from a "
+                    f"{filing.company_name} SEC 10-Q quarterly filing.\n\n"
+                    f"Financial data:\n{text[:5000]}\n\n"
+                    "Analyze this financial data and return ONLY valid JSON matching the schema.\n"
+                    "For structured XBRL data:\n"
+                    "- Revenue beat / growth → Positive signal\n"
+                    "- Revenue miss / decline → Risk signal\n"
+                    "- Extract SPECIFIC numbers for key_facts (e.g. 'Revenue $12.1B +8% YoY')\n"
+                    "- Set confidence 75-90 for structured XBRL data\n"
+                    "- Set guidance_direction based on any guidance language found\n"
+                    "- NEVER return confidence 0"
+                )
+            else:
+                prompt = f"{self.SYSTEM_PROMPT}\n\nAnalyze this SEC 10-Q quarterly report:\n\n{text}"
 
             response_text = call_gemini(
                 prompt,

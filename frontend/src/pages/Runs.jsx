@@ -9,16 +9,74 @@ export default function Runs() {
     const navigate = useNavigate();
 
     useEffect(() => {
-        fetch(`${API}/logs/history`)
-            .then(res => res.json())
-            .then(data => {
-                if (data.runs && Array.isArray(data.runs)) {
-                    setRuns(data.runs.sort((a, b) => b.startTime > a.startTime ? 1 : -1));
+        const fetchRuns = async () => {
+            try {
+                const r = await fetch(`${API}/logs/history`);
+                if (r.ok) {
+                    const data = await r.json();
+                    if (data.runs && Array.isArray(data.runs) && data.runs.length > 0) {
+                        setRuns(data.runs.sort((a, b) => b.startTime > a.startTime ? 1 : -1));
+                        return;
+                    }
                 }
-            })
-            .catch(err => console.error("Failed to fetch log history:", err))
-            .finally(() => setLoading(false));
+                // Fallback: build run history from stored signals
+                const r2 = await fetch(`${API}/signals?limit=200`);
+                if (r2.ok) {
+                    const sigData = await r2.json();
+                    const sigs = Array.isArray(sigData) ? sigData : (sigData?.signals || []);
+                    const grouped = groupSignalsIntoRuns(sigs);
+                    setRuns(grouped);
+                }
+            } catch (err) {
+                console.error('Runs fetch failed:', err);
+            } finally {
+                setLoading(false);
+            }
+        };
+        fetchRuns();
     }, []);
+
+    function groupSignalsIntoRuns(signals) {
+        if (!signals?.length) return [];
+        const sorted = [...signals].sort(
+            (a, b) => new Date(b.created_at) - new Date(a.created_at)
+        );
+        const runs = [];
+        let currentRun = null;
+        sorted.forEach(sig => {
+            const sigTime = new Date(sig.created_at).getTime();
+            if (!currentRun || sigTime < currentRun.startTime - 300000) {
+                currentRun = {
+                    id: sig.id,
+                    ticker: sig.ticker || 'SYS',
+                    startTime: sig.created_at,
+                    endTime: sig.created_at,
+                    startTimeMs: sigTime,
+                    signals: 0,
+                    errors: 0,
+                    complete: true,
+                    entries: [],
+                    _sigs: [sig],
+                };
+                runs.push(currentRun);
+            } else {
+                currentRun._sigs.push(sig);
+                if (sig.created_at < currentRun.endTime) {
+                    currentRun.endTime = sig.created_at;
+                }
+            }
+        });
+        return runs.map(r => ({
+            ...r,
+            signals: r._sigs.length,
+            entries: r._sigs.map(s => ({
+                time: new Date(s.created_at).toISOString().substring(11, 19),
+                step: 'PIPELINE',
+                level: s.signal === 'Risk' ? 'warning' : s.signal === 'Positive' ? 'success' : 'info',
+                message: `[${s.ticker}/${s.filing_type || '?'}] ${s.signal} (conf ${s.confidence}) — ${(s.summary || '').slice(0, 80)}`,
+            })),
+        }));
+    }
 
     const SIG_COLOR = { Positive: '#00C805', Neutral: '#888', Risk: '#FF3333' };
 

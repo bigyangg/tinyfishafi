@@ -4,6 +4,21 @@ description: Current phase completion status and what was fixed in each upgrade 
 type: project
 ---
 
+AFI is at Phase 10 Complete as of 2026-03-18. Phase 11 maintenance fixes applied 2026-03-19.
+
+## Phase 11 fixes (2026-03-19)
+
+- `_poll_edgar` now queries last 3 days (three_days_ago) instead of today only; filing cap raised 20→50
+- Dedup in `_process_filing`: selects confidence, only skips if conf>0; deletes conf=0 stale rows and retries
+- `backfill_recent_filings` async function added to `edgar_agent.py` at module level
+- `POST /api/edgar/backfill` endpoint added to `server.py`; `BackgroundTasks` added to fastapi imports
+- `/api/correlations/graph` fully replaced: imports COMPETITORS/SUPPLY_CHAIN/TICKER_SECTOR from correlation_engine, builds nodes from TICKER_SECTOR, adds competitor/supply_chain/customer/peer links, returns both `links` and `edges` keys; uses `@app.get` decorator (not api_router) to avoid double prefix
+- `frontend/src/pages/Radar.jsx` created (uses useAppData, week buckets, mini signal cards)
+- `Dashboard.jsx` RADAR view now uses `<Radar />` from pages/ instead of `<RadarView />` from components/views/
+- `Graph.jsx`: data fetch reads `data.links || data.edges`; includes ALL nodes; SECTOR_POSITIONS + handleEngineStart cluster force added; getLinkColor/getLinkWidth callbacks with sectorFilter + link.type awareness; physics tuned (alphaDecay=0.015, velocityDecay=0.25, warmupTicks=100, cooldownTime=4000)
+
+---
+
 AFI is at Phase 8 Complete as of 2026-03-18. A production-grade audit and fix pass was completed covering all system layers.
 
 **Why:** User reported flicker/blank screen on page navigation, Graph "node not found" errors, broken UI layout, and need for premium landing page quality.
